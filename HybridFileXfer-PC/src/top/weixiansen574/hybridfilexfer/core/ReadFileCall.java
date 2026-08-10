@@ -1,8 +1,16 @@
 package top.weixiansen574.hybridfilexfer.core;
 
+import java.io.EOFException;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.LinkedBlockingDeque;
 
@@ -21,9 +29,13 @@ public abstract class ReadFileCall implements Callable<Void> {
     private final Directory localDir;
     private final Directory remoteDir;
     private final int operateThreadCount;
+    private final Object stateLock = new Object();
+    private final Set<String> transferPaths = new HashSet<>();
+    private volatile boolean canceled;
     private int fileIndex = -1;
 
-    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
+    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files,
+                        Directory localDir, Directory remoteDir, int operateThreadCount) {
         this.buffers = buffers;
         this.files = files;
         this.localDir = localDir;
@@ -35,6 +47,7 @@ public abstract class ReadFileCall implements Callable<Void> {
     public Void call() throws Exception {
         try {
             for (RemoteFile file : files) {
+                ensureActive();
                 if (!fileExists(file.getPath())) {
                     continue;
                 }
@@ -43,13 +56,21 @@ public abstract class ReadFileCall implements Callable<Void> {
                     listFilesAndRead(file);
                 }
             }
-            for (int i = 0; i < operateThreadCount; i++) {
-                deque.add(END_POINT);
+            synchronized (stateLock) {
+                if (!canceled) {
+                    for (int i = 0; i < operateThreadCount; i++) {
+                        deque.add(END_POINT);
+                    }
+                }
             }
         } catch (Exception e) {
-            //当发生读取错误时
-            for (int i = 0; i < operateThreadCount; i++) {
-                deque.add(READ_ERROR);
+            synchronized (stateLock) {
+                if (canceled) {
+                    return null;
+                }
+                for (int i = 0; i < operateThreadCount; i++) {
+                    deque.add(READ_ERROR);
+                }
             }
             throw e;
         }
@@ -57,87 +78,188 @@ public abstract class ReadFileCall implements Callable<Void> {
     }
 
     private void listFilesAndRead(RemoteFile folder) throws Exception {
-        List<RemoteFile> files = listFiles(folder.getPath());
-        if (files != null) {
-            for (RemoteFile file : files) {
-                readToDeque(file);
-                if (file.isDirectory()) {
-                    listFilesAndRead(file); // 递归遍历子文件夹
-                }
+        ArrayDeque<RemoteFile> pending = new ArrayDeque<>();
+        pushChildrenInOrder(pending, listFiles(folder.getPath()));
+        while (!pending.isEmpty()) {
+            ensureActive();
+            RemoteFile file = pending.removeFirst();
+            readToDeque(file);
+            if (file.isDirectory()) {
+                pushChildrenInOrder(pending, listFiles(file.getPath()));
             }
+        }
+    }
+
+    private static void pushChildrenInOrder(ArrayDeque<RemoteFile> pending,
+                                            List<RemoteFile> children) {
+        if (children == null) {
+            return;
+        }
+        for (int i = children.size() - 1; i >= 0; i--) {
+            pending.addFirst(children.get(i));
         }
     }
 
     private void readToDeque(RemoteFile file) throws Exception {
+        if (fileIndex >= HFXService.MAX_FILE_ENTRIES - 1) {
+            throw new IOException("Too many files in one transfer");
+        }
         fileIndex++;
+        String transferPath = localDir.generateTransferPath(file.getPath(), remoteDir);
+        String transferPathKey = remoteDir.fileSystem == Directory.FILE_SYSTEM_WINDOWS
+                ? transferPath.toLowerCase(Locale.ROOT) : transferPath;
+        if (!transferPaths.add(transferPathKey)) {
+            throw new IOException("Multiple source paths map to the same destination: "
+                    + transferPath);
+        }
+        if (transferPath.getBytes(StandardCharsets.UTF_8).length > 65_535) {
+            throw new IOException("Transfer path is too long");
+        }
         if (file.isDirectory()) {
-            deque.add(new FileBlock(false,
-                    fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
-                    file.lastModified(), 0, 0, null));
-            return;
-        }
-        //RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
-        FileChannel channel = openFile(file.getPath());
-        long length = channel.size();
-        long lastModified = file.lastModified();
-        long remaining = length;
-        if (length == 0){
-            ByteBuffer buffer = buffers.take();
-            buffer.clear();
-            buffer.limit(0);
-            deque.add(new FileBlock(true,
-                    fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
-                    lastModified, length, 0, buffer));
-            closeFile();
-            return;
-        }
-        int i = 0;
-        while (remaining > 0){
-            int blkSize = (int) Math.min(remaining,FileBlock.BLOCK_SIZE);
-            ByteBuffer buffer = buffers.take();
-            buffer.clear();
-            buffer.limit(blkSize);
-            while (buffer.hasRemaining()) {
-                channel.read(buffer);
+            if (!enqueueIfActive(new FileBlock(false,
+                    fileIndex, transferPath,
+                    file.lastModified(), 0, 0, null))) {
+                throw new InterruptedException("File reading was canceled");
             }
-            deque.add(new FileBlock(true,
-                    fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
-                    lastModified, length, i, buffer));
-            remaining -= blkSize;
-            i++;
+            return;
         }
-        closeFile();
+
+        FileChannel channel = openFile(file.getPath());
+        try {
+            long length = channel.size();
+            if (length > (long) HFXService.MAX_BLOCKS_PER_FILE * FileBlock.BLOCK_SIZE) {
+                throw new IOException("File is too large for the transfer protocol");
+            }
+            long lastModified = file.lastModified();
+            long remaining = length;
+            if (length == 0) {
+                enqueueFileBlock(channel, transferPath, length, lastModified, 0, 0);
+                return;
+            }
+            int index = 0;
+            while (remaining > 0) {
+                ensureActive();
+                int blockSize = (int) Math.min(remaining, FileBlock.BLOCK_SIZE);
+                enqueueFileBlock(channel, transferPath, length, lastModified, index, blockSize);
+                remaining -= blockSize;
+                index++;
+            }
+        } finally {
+            closeFile();
+        }
+    }
+
+    private void enqueueFileBlock(FileChannel channel, String transferPath, long length,
+                                  long lastModified, int index, int blockSize) throws Exception {
+        ByteBuffer buffer = buffers.take();
+        boolean queued = false;
+        try {
+            ensureActive();
+            buffer.clear();
+            buffer.limit(blockSize);
+            while (buffer.hasRemaining()) {
+                int read = channel.read(buffer);
+                if (read < 0) {
+                    throw new EOFException("File ended before the advertised size");
+                }
+            }
+            queued = enqueueIfActive(new FileBlock(true,
+                    fileIndex, transferPath,
+                    lastModified, length, index, buffer));
+            if (!queued) {
+                throw new InterruptedException("File reading was canceled");
+            }
+        } finally {
+            if (!queued) {
+                recycleBuffer(buffer);
+            }
+        }
     }
 
     public void recycleBuffer(ByteBuffer buffer) {
-        buffers.add(buffer);
+        if (buffer != null) {
+            buffers.add(buffer);
+        }
+    }
+
+    public void retryBlock(FileBlock block) {
+        if (block == null) {
+            return;
+        }
+        if (block.data != null) {
+            block.data.limit(block.data.capacity());
+            block.data.position(block.getLength());
+        }
+        synchronized (stateLock) {
+            if (!canceled) {
+                deque.addFirst(block);
+                return;
+            }
+        }
+        recycleBuffer(block.data);
     }
 
     public FileBlock takeBlock() throws InterruptedException {
         return deque.take();
     }
 
-    //当对方写入时发生错误时
     public void shutdownByWriteError() {
-        recycleAllBuffer();
-        for (int i = 0; i < operateThreadCount; i++) {
-            deque.addFirst(WRITE_ERROR);
+        synchronized (stateLock) {
+            if (canceled) {
+                return;
+            }
+            canceled = true;
+            recycleAllBuffer();
+            for (int i = 0; i < operateThreadCount; i++) {
+                deque.addFirst(WRITE_ERROR);
+            }
         }
     }
 
-    //当其中任意一条通道断开时
+    public void cancelReading() {
+        synchronized (stateLock) {
+            if (canceled) {
+                return;
+            }
+            canceled = true;
+            recycleAllBuffer();
+        }
+    }
+
     public void shutdownByConnectionBreak() {
-        recycleAllBuffer();
-        for (int i = 0; i < operateThreadCount - 1; i++) {
-            deque.addFirst(INTERRUPT);
+        synchronized (stateLock) {
+            if (canceled) {
+                return;
+            }
+            canceled = true;
+            recycleAllBuffer();
+            for (int i = 0; i < operateThreadCount - 1; i++) {
+                deque.addFirst(INTERRUPT);
+            }
+        }
+    }
+
+    private boolean enqueueIfActive(FileBlock block) {
+        synchronized (stateLock) {
+            if (canceled) {
+                return false;
+            }
+            deque.add(block);
+            return true;
+        }
+    }
+
+    private void ensureActive() throws InterruptedException {
+        if (canceled || Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("File reading was canceled");
         }
     }
 
     private void recycleAllBuffer() {
-        for (FileBlock fileBlock : deque) {
-            if (fileBlock.data != null) {
-                recycleBuffer(fileBlock.data);
-            }
+        List<FileBlock> pending = new ArrayList<>();
+        deque.drainTo(pending);
+        for (FileBlock fileBlock : pending) {
+            recycleBuffer(fileBlock.data);
         }
     }
 
@@ -148,5 +270,4 @@ public abstract class ReadFileCall implements Callable<Void> {
     protected abstract FileChannel openFile(String path) throws Exception;
 
     protected abstract void closeFile() throws Exception;
-
 }

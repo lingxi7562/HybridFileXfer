@@ -22,10 +22,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 import rikka.shizuku.Shizuku;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
@@ -41,6 +41,7 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
     boolean isShizuku = false;
     int ioMode;
     String controllerIp;
+    int serverPort;
     String homeDir;
     ProgressDialog progressDialog;
     DroidHFXClient client;
@@ -49,6 +50,8 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
     TextView txvUploadSpeed, txvDownloadSpeed;
     LinearLayout lConnections;
     private final Map<String, Holder> holderMap = new HashMap<>();
+    private boolean serviceBinding;
+    private boolean destroyed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +70,10 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
         ioMode = extras.getInt("io_mode");
         isShizuku = ioMode != 0;
         controllerIp = extras.getString("controller_ip");
+        serverPort = extras.getInt("server_port", 5740);
+        if (serverPort <= 0 || serverPort > 65535) {
+            serverPort = 5740;
+        }
         homeDir = extras.getString("home_dir");
 
         progressDialog = new ProgressDialog(context);
@@ -80,36 +87,81 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
         txvDownloadSpeed = findViewById(R.id.download_speed);
         lConnections = findViewById(R.id.connections);
 
+        NotificationPermissionHelper.requestOnce(this);
+        if (!DirectTransferKeepAliveService.start(
+                this, DirectTransferKeepAliveService.OWNER_CLIENT)) {
+            Toast.makeText(this, R.string.direct_keep_alive_failed,
+                    Toast.LENGTH_LONG).show();
+        }
         bindAndStartService();
     }
 
     private void bindAndStartService() {
-        if (isShizuku) {
-            Shizuku.bindUserService(IOService.getUserServiceArgs(context), this);
-        } else {
-            Intent intent = new Intent(context, IOService.class);
-            bindService(intent, this, Service.BIND_AUTO_CREATE);
+        try {
+            if (isShizuku) {
+                serviceBinding = true;
+                Shizuku.bindUserService(IOService.getUserServiceArgs(context), this);
+            } else {
+                Intent intent = new Intent(context, IOService.class);
+                serviceBinding = bindService(intent, this, Service.BIND_AUTO_CREATE);
+                if (!serviceBinding) {
+                    showIoServiceConnectionFailed();
+                }
+            }
+        } catch (RuntimeException e) {
+            serviceBinding = false;
+            showIoServiceConnectionFailed();
         }
     }
 
     private void unbindService() {
-        if (isShizuku) {
-            Shizuku.unbindUserService(IOService.getUserServiceArgs(context), this, true);
-        } else {
-            unbindService(this);
+        if (!serviceBinding) {
+            return;
         }
+        serviceBinding = false;
+        try {
+            if (isShizuku) {
+                Shizuku.unbindUserService(IOService.getUserServiceArgs(context), this, true);
+            } else {
+                unbindService(this);
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void showIoServiceConnectionFailed() {
+        if (destroyed) {
+            return;
+        }
+        progressDialog.dismiss();
+        dialogErrorMessage(getString(R.string.connection_failed),
+                getString(R.string.io_service_connection_failed));
     }
 
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
+        if (destroyed) {
+            unbindService();
+            return;
+        }
         iioService = IIOService.Stub.asInterface(service);
         progressDialog.setMessage(getString(R.string.connecting_server));
-        client = new DroidHFXClient(controllerIp, 5740, homeDir, iioService, context);
+        client = new DroidHFXClient(controllerIp, serverPort, homeDir, iioService, context);
+        ArrayList<String> failedChannels = new ArrayList<>();
         new ConnectServerTask(new ConnectServerTask.Callback() {
             @Override
             public void onConnectSuccess(List<String> channelNames) {
+                if (destroyed) {
+                    client.close();
+                    client.freeBuffers();
+                    return;
+                }
                 txvState.setText(R.string.waiting_for_tasks);
                 Toast.makeText(context, R.string.connection_successful, Toast.LENGTH_SHORT).show();
+                if (!failedChannels.isEmpty()) {
+                    Toast.makeText(context, getString(R.string.transfer_channels_skipped,
+                            failedChannels.size()), Toast.LENGTH_LONG).show();
+                }
                 progressDialog.dismiss();
                 LayoutInflater inflater = LayoutInflater.from(context);
                 for (String channelName : channelNames) {
@@ -125,11 +177,16 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
 
             @Override
             public void onConnectingControlChannel(String address, int port) {
-                progressDialog.setMessage(getString(R.string.connecting_controller,address));
+                if (!destroyed) {
+                    progressDialog.setMessage(getString(R.string.connecting_controller,address));
+                }
             }
 
             @Override
             public void onVersionMismatch(int localVersion, int remoteVersion) {
+                if (destroyed) {
+                    return;
+                }
                 progressDialog.dismiss();
                 dialogErrorMessage(getString(R.string.connection_failed),
                         getString(R.string.Inconsistent_protocol_versions,localVersion,remoteVersion));
@@ -137,6 +194,9 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
 
             @Override
             public void onConnectControlFailed() {
+                if (destroyed) {
+                    return;
+                }
                 progressDialog.dismiss();
                 dialogErrorMessage(getString(R.string.connection_failed),
                         getString(R.string.control_channel_connection_failed));
@@ -144,21 +204,47 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
 
             @Override
             public void onConnectingTransferChannel(String name, InetAddress inetAddress, InetAddress bindAddress) {
-                progressDialog.setMessage(getString(R.string.connecting_transfer_channel,
-                        name, inetAddress.getHostAddress(), bindAddress == null ?
-                        "null" : bindAddress.getHostAddress()));
+                if (!destroyed) {
+                    progressDialog.setMessage(getString(R.string.connecting_transfer_channel,
+                            name, inetAddress.getHostAddress(), bindAddress == null ?
+                            "null" : bindAddress.getHostAddress()));
+                }
             }
 
             @Override
             public void onConnectTransferChannelFailed(String name, InetAddress inetAddress, Exception e) {
+                if (destroyed) {
+                    return;
+                }
+                failedChannels.add(name);
+                progressDialog.setMessage(getString(R.string.transfer_channel_skipped, name));
+            }
+
+            @Override
+            public void onNoTransferChannels() {
+                if (destroyed) {
+                    return;
+                }
                 progressDialog.dismiss();
                 dialogErrorMessage(getString(R.string.connection_failed),
-                        String.format(getString(R.string.transfer_channel_connection_failed),
-                        name, inetAddress.getHostAddress(), e));
+                        getString(R.string.no_transfer_channels));
+            }
+
+            @Override
+            public void onProtocolError(String message) {
+                if (destroyed) {
+                    return;
+                }
+                progressDialog.dismiss();
+                dialogErrorMessage(getString(R.string.connection_failed),
+                        getString(R.string.protocol_error_message, message));
             }
 
             @Override
             public void onOOM(int createdBuffers, int requiredBuffers, long maxMemoryMB, String osArch) {
+                if (destroyed) {
+                    return;
+                }
                 progressDialog.dismiss();
                 dialogErrorMessage(getString(R.string.c_oom_title),
                         getString(R.string.failed_to_create_buffer_block,
@@ -167,12 +253,18 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
 
             @Override
             public void onRemoteOOM() {
+                if (destroyed) {
+                    return;
+                }
                 progressDialog.dismiss();
                 dialogErrorMessage(getString(R.string.c_remote_oom_title), getString(R.string.c_remote_oom_message));
             }
 
             @Override
             public void onError(Throwable th) {
+                if (destroyed) {
+                    return;
+                }
                 progressDialog.dismiss();
                 dialogErrorMessage(getString(R.string.lian_jie_shi_fa_sheng_cuo_wu), th.toString());
             }
@@ -181,6 +273,14 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
+        serviceBinding = false;
+        if (destroyed) {
+            return;
+        }
+        if (client != null) {
+            client.close();
+        }
+        showIoServiceConnectionFailed();
     }
 
     private void start() {
@@ -271,7 +371,8 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
             @SuppressLint("SetTextI18n")
             @Override
             public void onComplete(boolean isUpload, long traffic, long time) {
-                txvState.setText((isUpload ? "▲ " : "▼ ") + Utils.formatSpeed(traffic / time * 1000) +
+                long averageSpeed = time <= 0 ? 0 : traffic / time * 1000;
+                txvState.setText((isUpload ? "▲ " : "▼ ") + Utils.formatSpeed(averageSpeed) +
                         " · " + Utils.formatTime(time) + " · " + Utils.formatFileSize(traffic));
                 for (Map.Entry<String, Holder> entry : holderMap.entrySet()) {
                     Holder holder = entry.getValue();
@@ -297,11 +398,21 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
     }
 
     private void showEvent(String iName, String event) {
-        Objects.requireNonNull(holderMap.get(iName))
-                .transferEvent.setText(event);
+        Holder holder = holderMap.get(iName);
+        if (!destroyed && holder != null) {
+            holder.transferEvent.setText(event);
+        }
     }
 
     private void dialogErrorMessage(String title, String message) {
+        if (destroyed || isFinishing()) {
+            return;
+        }
+        if (client != null) {
+            client.close();
+        }
+        DirectTransferKeepAliveService.stop(
+                this, DirectTransferKeepAliveService.OWNER_CLIENT);
         new AlertDialog.Builder(context)
                 .setTitle(title)
                 .setMessage(message)
@@ -313,9 +424,16 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
 
     @Override
     protected void onDestroy() {
-        if (iioService != null) {
-            unbindService();
+        destroyed = true;
+        if (progressDialog != null && progressDialog.isShowing()) {
+            progressDialog.dismiss();
         }
+        if (client != null) {
+            client.close();
+        }
+        unbindService();
+        DirectTransferKeepAliveService.stop(
+                this, DirectTransferKeepAliveService.OWNER_CLIENT);
         super.onDestroy();
     }
 
@@ -326,7 +444,7 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
             return true;
 
         }
-        return false;
+        return super.onKeyDown(keyCode, event);
     }
 
     private static class Holder {

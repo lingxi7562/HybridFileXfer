@@ -120,7 +120,12 @@ public class Directory {
         // 计算相对于本地目录的相对路径
         String localFolder = this.path; // 已经规范化且以localSep结尾
         String relativePath;
-        if (normalizedFile.startsWith(localFolder)) {
+        boolean insideLocalFolder = this.fileSystem == FILE_SYSTEM_WINDOWS
+                ? normalizedFile.regionMatches(true, 0, localFolder, 0,
+                Math.min(normalizedFile.length(), localFolder.length()))
+                && normalizedFile.length() >= localFolder.length()
+                : normalizedFile.startsWith(localFolder);
+        if (insideLocalFolder) {
             relativePath = normalizedFile.substring(localFolder.length());
         } else {
             // 如果 file 不以本地目录开头，则去掉前导分隔符（如果有）
@@ -138,10 +143,20 @@ public class Directory {
         for (String seg : segments) {
             if (seg.isEmpty()) continue;
             String sanitized = seg.replaceAll("[\\\\:*?\"<>|]", "_");
+            if (remote.fileSystem == FILE_SYSTEM_WINDOWS) {
+                sanitized = sanitizeWindowsSegment(sanitized);
+            }
             sanitizedSegments.add(sanitized);
         }
         // 用远程系统的分隔符拼接
-        String sanitizedRelative = String.join(remoteSep, sanitizedSegments);
+        StringBuilder relativeBuilder = new StringBuilder();
+        for (String segment : sanitizedSegments) {
+            if (relativeBuilder.length() > 0) {
+                relativeBuilder.append(remoteSep);
+            }
+            relativeBuilder.append(segment);
+        }
+        String sanitizedRelative = relativeBuilder.toString();
 
         // 组合远程文件夹与经过非法字符替换后的相对路径，注意 remote.path 已规范化（结尾包含分隔符）
         if (sanitizedRelative.isEmpty()) {
@@ -149,6 +164,17 @@ public class Directory {
         } else {
             return remote.path + sanitizedRelative;
         }
+    }
+
+    private static String sanitizeWindowsSegment(String segment) {
+        String sanitized = segment.replaceAll("[ .]+$", "_");
+        int dot = sanitized.indexOf('.');
+        String base = dot < 0 ? sanitized : sanitized.substring(0, dot);
+        base = base.replaceAll("[ .]+$", "").toUpperCase(java.util.Locale.ROOT);
+        if (base.matches("CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]")) {
+            sanitized = "_" + sanitized;
+        }
+        return sanitized;
     }
 
     public static int getCurrentFileSystem(){

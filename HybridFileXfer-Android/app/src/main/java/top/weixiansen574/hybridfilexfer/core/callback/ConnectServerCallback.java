@@ -17,6 +17,14 @@ public interface ConnectServerCallback {
 
     void onConnectTransferChannelFailed(String name, InetAddress inetAddress, Exception e);
 
+    default void onNoTransferChannels() {
+        onConnectControlFailed();
+    }
+
+    default void onProtocolError(String message) {
+        onConnectControlFailed();
+    }
+
     void onOOM(
             int createdBuffers,
             int requiredBuffers,

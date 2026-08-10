@@ -4,26 +4,85 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ByteChannel;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.ClosedSelectorException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 
 public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
     private final ByteChannel origin;
     private final ByteBuffer buffer = ByteBuffer.allocate(8);
+    private final Selector selector;
+    private volatile long idleTimeoutMillis;
 
     public DataByteChannel(ByteChannel origin) {
         this.origin = origin;
+        this.selector = null;
+        this.idleTimeoutMillis = 0;
+    }
+
+    /**
+     * Creates a channel that fails when a socket makes no read/write progress for
+     * the requested interval. The socket is switched to non-blocking mode so a VPN
+     * black hole cannot trap a transfer thread inside the kernel indefinitely.
+     */
+    public DataByteChannel(ByteChannel origin, long idleTimeoutMillis) throws IOException {
+        this.origin = origin;
+        this.idleTimeoutMillis = idleTimeoutMillis;
+        if (idleTimeoutMillis > 0 && origin instanceof SocketChannel) {
+            SocketChannel socketChannel = (SocketChannel) origin;
+            socketChannel.configureBlocking(false);
+            selector = Selector.open();
+            socketChannel.register(selector, 0);
+        } else {
+            selector = null;
+        }
+    }
+
+    public void setIdleTimeoutMillis(long idleTimeoutMillis) {
+        this.idleTimeoutMillis = Math.max(0, idleTimeoutMillis);
     }
 
     @Override
     public int read(ByteBuffer dst) throws IOException {
-        return origin.read(dst);
+        if (!dst.hasRemaining()) {
+            return 0;
+        }
+        while (true) {
+            int read = origin.read(dst);
+            if (read != 0 || selector == null) {
+                return read;
+            }
+            awaitReady(SelectionKey.OP_READ);
+        }
     }
 
     @Override
     public int write(ByteBuffer src) throws IOException {
-        return origin.write(src);
+        int total = 0;
+        while (src.hasRemaining()) {
+            int written = origin.write(src);
+            if (written < 0) {
+                throw new EOFException("Channel closed while writing");
+            }
+            if (written == 0) {
+                if (selector == null) {
+                    Thread.yield();
+                } else {
+                    awaitReady(SelectionKey.OP_WRITE);
+                }
+                continue;
+            }
+            total += written;
+        }
+        return total;
     }
 
     @Override
@@ -33,13 +92,81 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
 
     @Override
     public void close() throws IOException {
-        origin.close();
+        try {
+            origin.close();
+        } finally {
+            if (selector != null) {
+                selector.close();
+            }
+        }
     }
 
     public void readFully(ByteBuffer dst) throws IOException {
         while (dst.hasRemaining()) {
-            if (origin.read(dst) == -1) {
+            if (read(dst) == -1) {
                 throw new EOFException();
+            }
+        }
+    }
+
+    private void awaitReady(int operation) throws IOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Interrupted while waiting for network I/O");
+        }
+        SelectionKey key;
+        try {
+            key = ((SocketChannel) origin).keyFor(selector);
+            if (key == null || !key.isValid()) {
+                throw new EOFException("Socket channel is closed");
+            }
+            key.interestOps(operation);
+        } catch (CancelledKeyException | ClosedSelectorException e) {
+            EOFException closed = new EOFException("Socket channel is closed");
+            closed.initCause(e);
+            throw closed;
+        }
+        long timeout = idleTimeoutMillis;
+        long deadline = timeout == 0 ? 0
+                : System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
+        try {
+            while (true) {
+                int ready;
+                if (timeout == 0) {
+                    ready = selector.select();
+                } else {
+                    long remainingNanos = deadline - System.nanoTime();
+                    if (remainingNanos <= 0) {
+                        throw new SocketTimeoutException(
+                                "No network progress for " + timeout + " ms");
+                    }
+                    long remainingMillis = Math.max(1,
+                            TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+                    ready = selector.select(remainingMillis);
+                }
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedIOException("Interrupted while waiting for network I/O");
+                }
+                if (!key.isValid()) {
+                    throw new EOFException("Socket channel is closed");
+                }
+                if (ready > 0) {
+                    return;
+                }
+            }
+        } catch (ClosedSelectorException e) {
+            EOFException closed = new EOFException("Socket channel is closed");
+            closed.initCause(e);
+            throw closed;
+        } finally {
+            try {
+                if (key.isValid()) {
+                    key.interestOps(0);
+                }
+            } catch (CancelledKeyException ignored) {
+            }
+            try {
+                selector.selectedKeys().clear();
+            } catch (ClosedSelectorException ignored) {
             }
         }
     }
@@ -56,8 +183,21 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
 
     @Override
     public int skipBytes(int n) throws IOException {
-        ByteBuffer skipBuffer = ByteBuffer.allocate(n);
-        return origin.read(skipBuffer);
+        if (n <= 0) {
+            return 0;
+        }
+        ByteBuffer skipBuffer = ByteBuffer.allocate(Math.min(n, 8 * 1024));
+        int skipped = 0;
+        while (skipped < n) {
+            skipBuffer.clear();
+            skipBuffer.limit(Math.min(skipBuffer.capacity(), n - skipped));
+            int read = read(skipBuffer);
+            if (read < 0) {
+                break;
+            }
+            skipped += read;
+        }
+        return skipped;
     }
 
     @Override
@@ -147,7 +287,7 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
-        origin.write(ByteBuffer.wrap(b, off, len));
+        write(ByteBuffer.wrap(b, off, len));
     }
 
     @Override
@@ -160,7 +300,7 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
         buffer.clear();
         buffer.put((byte) v);
         buffer.flip();
-        origin.write(buffer);
+        write(buffer);
     }
 
     @Override
@@ -168,7 +308,7 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
         buffer.clear();
         buffer.putShort((short) v);
         buffer.flip();
-        origin.write(buffer);
+        write(buffer);
     }
 
     @Override
@@ -181,7 +321,7 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
         buffer.clear();
         buffer.putInt(v);
         buffer.flip();
-        origin.write(buffer);
+        write(buffer);
     }
 
     @Override
@@ -189,7 +329,7 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
         buffer.clear();
         buffer.putLong(v);
         buffer.flip();
-        origin.write(buffer);
+        write(buffer);
     }
 
     @Override

@@ -17,3 +17,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "HybridFileXfer"
 include ':app'
+include ':pc'
+project(':pc').projectDir = file('../HybridFileXfer-PC')

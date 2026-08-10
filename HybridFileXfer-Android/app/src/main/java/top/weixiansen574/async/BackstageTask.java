@@ -4,16 +4,15 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 
 public abstract class BackstageTask<T extends BackstageTask.BaseEventHandler> implements Runnable{
     private final T uiHandler;
-    private boolean executed = false;
-    private boolean isComplete = false;
+    private volatile boolean executed = false;
+    private volatile boolean isComplete = false;
     public BackstageTask(T uiHandler) {
         this.uiHandler = uiHandler;
     }
@@ -27,14 +26,14 @@ public abstract class BackstageTask<T extends BackstageTask.BaseEventHandler> im
     @SuppressWarnings("unchecked")
     @Override
     public void run() {
-        List<Class<?>> interfaces = new LinkedList<>();
+        Set<Class<?>> interfaces = new LinkedHashSet<>();
         Class<?> clazz = uiHandler.getClass();
         while (clazz != null && clazz != Object.class) {
             interfaces.addAll(Arrays.asList(clazz.getInterfaces()));
             clazz = clazz.getSuperclass();
         }
         T proxyInstance = (T) Proxy.newProxyInstance(uiHandler.getClass().getClassLoader(),
-                interfaces.toArray(new Class[0]),
+                interfaces.toArray(new Class<?>[0]),
                 new EvProxyHandler(uiHandler));
         try {
             onStart(proxyInstance);
@@ -75,7 +74,16 @@ public abstract class BackstageTask<T extends BackstageTask.BaseEventHandler> im
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             if (method.getDeclaringClass() == Object.class){
-                return method.invoke(proxy,args);
+                switch (method.getName()) {
+                    case "equals":
+                        return proxy == args[0];
+                    case "hashCode":
+                        return System.identityHashCode(proxy);
+                    case "toString":
+                        return "UI callback proxy for " + evHandler;
+                    default:
+                        throw new UnsupportedOperationException(method.getName());
+                }
             }
             TaskManger.postOnUiThread(() -> {
                 try {

@@ -8,7 +8,7 @@ import top.weixiansen574.hybridfilexfer.core.bean.TrafficInfo;
 import top.weixiansen574.hybridfilexfer.core.callback.TransferFileCallback;
 
 public class SpeedMonitorThread extends Thread {
-    private boolean isRun = true;
+    private volatile boolean isRun = true;
     private final List<TransferConnection> connections;
     private final TransferFileCallback callback;
 

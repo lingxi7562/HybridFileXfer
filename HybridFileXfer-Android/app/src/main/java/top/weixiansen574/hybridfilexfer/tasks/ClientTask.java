@@ -17,5 +17,17 @@ public class ClientTask extends BackstageTask<ClientTask.Callback> {
         client.start(eventHandlerProxy);
     }
 
+    @Override
+    protected void onComplete() {
+        client.close();
+        client.freeBuffers();
+    }
+
+    @Override
+    protected void onError(Throwable th) {
+        client.close();
+        client.freeBuffers();
+    }
+
     public interface Callback extends ClientCallBack,BackstageTask.BaseEventHandler{}
 }

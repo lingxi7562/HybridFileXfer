@@ -100,7 +100,7 @@ public class Main {
 
         @Override
         public void onChannelComplete(String iName, long traffic, long time) {
-            Strings.printf("channel_complete", iName, time == 0 ? "∞" : Utils.formatSpeed(traffic / time * 1000));
+            Strings.printf("channel_complete", iName, formatTransferSpeed(traffic, time));
         }
 
         @Override
@@ -134,9 +134,9 @@ public class Main {
         @Override
         public void onComplete(boolean isUpload, long traffic, long time) {
             if (isUpload) {
-                Strings.printf("upload_complete", Utils.formatSpeed(traffic / time * 1000), Utils.formatTime(time), Utils.formatFileSize(traffic));
+                Strings.printf("upload_complete", formatTransferSpeed(traffic, time), Utils.formatTime(time), Utils.formatFileSize(traffic));
             } else {
-                Strings.printf("download_complete", Utils.formatSpeed(traffic / time * 1000), Utils.formatTime(time), Utils.formatFileSize(traffic));
+                Strings.printf("download_complete", formatTransferSpeed(traffic, time), Utils.formatTime(time), Utils.formatFileSize(traffic));
             }
         }
 
@@ -145,6 +145,15 @@ public class Main {
             Strings.printf("transfer_failed");
         }
     };
+
+    private static String formatTransferSpeed(long traffic, long timeMillis) {
+        if (timeMillis <= 0) {
+            return "∞";
+        }
+        double bytesPerSecond = (double) traffic * 1000d / timeMillis;
+        long safeRate = bytesPerSecond >= Long.MAX_VALUE ? Long.MAX_VALUE : Math.round(bytesPerSecond);
+        return Utils.formatSpeed(safeRate);
+    }
 
     /**主函数*/
     public static void main(String[] args) throws Exception {
@@ -232,6 +241,7 @@ public class Main {
 
                 switch (key){
                     case "--connect":       key = "-c"; break;
+                    case "--device":
                     case "--switch-device": key = "-s"; break;
                     case "--dir":           key = "-d"; break;
                     case "--help":          key = "-h"; break;

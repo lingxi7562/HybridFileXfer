@@ -13,6 +13,7 @@ public class FileBlock implements Comparable<FileBlock> {
     public final long totalSize;
     public final int index;
     public final ByteBuffer data;
+    private final int length;
 
     public FileBlock(boolean isFile, int fileIndex, String path, long lastModified, long totalSize, int index, ByteBuffer data) {
         this.isFile = isFile;
@@ -22,6 +23,7 @@ public class FileBlock implements Comparable<FileBlock> {
         this.totalSize = totalSize;
         this.index = index;
         this.data = data;
+        this.length = data == null ? -1 : data.position();
     }
 
     public long getStartPosition(){
@@ -29,7 +31,8 @@ public class FileBlock implements Comparable<FileBlock> {
     }
 
     public long calcBlockCount(){
-        return totalSize / BLOCK_SIZE + 1;
+        return totalSize <= 0 ? 1
+                : totalSize / BLOCK_SIZE + (totalSize % BLOCK_SIZE == 0 ? 0 : 1);
     }
 
     public boolean isFile(){
@@ -44,7 +47,7 @@ public class FileBlock implements Comparable<FileBlock> {
         if (data == null){
             return -1;
         }
-        return data.position();
+        return length;
     }
 
     @Override

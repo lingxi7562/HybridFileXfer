@@ -1,112 +1,192 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fillViewport="true"
     tools:context=".MainActivity">
 
-    <androidx.cardview.widget.CardView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_margin="8dp">
+        android:orientation="vertical"
+        android:padding="18dp">
 
-        <LinearLayout
+        <TextView
+            style="@style/TextAppearance.MaterialComponents.Headline4"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:padding="10dp">
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textStyle="bold" />
 
-            <androidx.constraintlayout.widget.ConstraintLayout
+        <TextView
+            style="@style/TextAppearance.MaterialComponents.Body1"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/main_subtitle" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="1dp">
+
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="40dp">
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
 
                 <TextView
-                    android:id="@+id/textView2"
-                    android:layout_width="wrap_content"
-                    android:minWidth="60dp"
-                    android:layout_height="match_parent"
-                    android:gravity="center"
-                    android:text="@string/conn"
-                    android:textColor="@color/fond"
-                    android:textSize="22sp"
-                    app:layout_constraintStart_toStartOf="parent" />
+                    style="@style/TextAppearance.MaterialComponents.Headline6"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/quick_actions"
+                    android:textStyle="bold" />
 
                 <TextView
-                    android:id="@+id/textView"
-                    android:layout_width="wrap_content"
-                    android:minWidth="60dp"
-                    android:layout_height="match_parent"
-                    android:gravity="center"
-                    android:text="@string/mode_"
-                    android:textColor="@color/fond"
-                    android:textSize="16sp"
-                    app:layout_constraintStart_toEndOf="@+id/textView2" />
+                    android:id="@+id/server_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/server_status_idle" />
 
-                <Spinner
-                    android:id="@+id/spinner_mode"
-                    android:layout_width="wrap_content"
-                    android:layout_height="match_parent"
-                    android:entries="@array/select_mode"
-                    app:layout_constraintStart_toEndOf="@+id/textView" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/start_server"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:minHeight="56dp"
+                    android:text="@string/receive_from_phone"
+                    app:icon="@drawable/baseline_file_download_24" />
+
+                <TextView
+                    style="@style/TextAppearance.MaterialComponents.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/receive_from_phone_hint" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/connect_phone"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:minHeight="56dp"
+                    android:text="@string/connect_nearby_phone"
+                    app:icon="@drawable/baseline_phonelink_ring_24" />
+
+                <TextView
+                    style="@style/TextAppearance.MaterialComponents.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/connect_nearby_phone_hint" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/share_by_qr"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:minHeight="56dp"
+                    android:text="@string/share_by_qr"
+                    app:icon="@drawable/baseline_qr_code_24" />
+
+                <TextView
+                    style="@style/TextAppearance.MaterialComponents.Caption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/share_by_qr_hint" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/to_transfer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:enabled="false"
+                    android:minHeight="54dp"
+                    android:text="@string/transfer_files"
+                    android:visibility="gone"
+                    app:icon="@drawable/baseline_arrow_outward_24" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="24dp"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    style="@style/TextAppearance.MaterialComponents.Headline6"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/advanced_connection"
+                    android:textStyle="bold" />
 
                 <LinearLayout
-                    android:id="@+id/refresh"
-                    android:layout_width="wrap_content"
-                    android:layout_height="30dp"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:foreground="?selectableItemBackground"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    app:layout_constraintEnd_toEndOf="parent"
-                    app:layout_constraintTop_toTopOf="parent">
-
-                    <ImageView
-                        android:layout_width="25dp"
-                        android:layout_height="25dp"
-                        android:layout_gravity="center_vertical"
-                        android:src="@drawable/baseline_refresh_24" />
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_gravity="center_vertical"
-                        android:text="@string/refresh" />
+                        android:text="@string/mode_" />
+
+                    <Spinner
+                        android:id="@+id/spinner_mode"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:entries="@array/select_mode" />
                 </LinearLayout>
 
-            </androidx.constraintlayout.widget.ConstraintLayout>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rec_view_net_cards"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1" />
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/network_channels"
+                        android:textStyle="bold" />
 
-            <Button
-                android:id="@+id/start_server"
-                style="@style/Widget.AppCompat.Button.Colored"
-                android:layout_width="match_parent"
-                android:layout_height="50dp"
-                android:text="@string/start_service_and_wait_onnect" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/refresh"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:text="@string/refresh"
+                        app:icon="@drawable/baseline_refresh_24" />
+                </LinearLayout>
 
-            <Button
-                android:id="@+id/to_transfer"
-                style="@style/Widget.AppCompat.Button.Colored"
-                android:layout_width="match_parent"
-                android:layout_height="50dp"
-                android:enabled="false"
-                android:text="@string/transfer_files" />
-           <!-- <Button
-                android:id="@+id/test"
-                style="@style/Widget.AppCompat.Button.Colored"
-                android:layout_width="match_parent"
-                android:layout_height="50dp"
-                android:text="测试" />-->
-
-        </LinearLayout>
-
-
-
-    </androidx.cardview.widget.CardView>
-
-</LinearLayout>
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rec_view_net_cards"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nestedScrollingEnabled="false" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

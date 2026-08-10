@@ -3,6 +3,7 @@ package top.weixiansen574.hybridfilexfer.droidcore;
 import android.os.ParcelFileDescriptor;
 
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.List;
@@ -38,16 +39,53 @@ public class DroidReadFileCall extends ReadFileCall {
     @Override
     protected FileChannel openFile(String path) throws Exception {
         pfd = ioService.openReadableFile(path);
-        fileInputStream = new FileInputStream(pfd.getFileDescriptor());
-        channel = fileInputStream.getChannel();
-        return channel;
+        if (pfd == null) {
+            throw new IOException("Unable to open source file: " + path);
+        }
+        try {
+            fileInputStream = new FileInputStream(pfd.getFileDescriptor());
+            channel = fileInputStream.getChannel();
+            return channel;
+        } catch (Exception e) {
+            try {
+                pfd.close();
+            } catch (IOException closeError) {
+                e.addSuppressed(closeError);
+            }
+            pfd = null;
+            throw e;
+        }
     }
 
     @Override
     protected void closeFile() throws Exception {
-        channel.close();
-        fileInputStream.close();
-        pfd.close();
+        IOException failure = null;
+        try {
+            if (fileInputStream != null) {
+                fileInputStream.close();
+            }
+        } catch (IOException e) {
+            failure = e;
+        } finally {
+            fileInputStream = null;
+            channel = null;
+        }
+        try {
+            if (pfd != null) {
+                pfd.close();
+            }
+        } catch (IOException e) {
+            if (failure == null) {
+                failure = e;
+            } else {
+                failure.addSuppressed(e);
+            }
+        } finally {
+            pfd = null;
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
 }

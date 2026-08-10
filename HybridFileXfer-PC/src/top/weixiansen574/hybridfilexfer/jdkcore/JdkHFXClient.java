@@ -15,7 +15,12 @@ import java.util.concurrent.LinkedBlockingDeque;
 public class JdkHFXClient extends HFXClient {
 
     public JdkHFXClient(String serverControllerAddress, int serverPort, String homeDir) {
-        super(serverControllerAddress, serverPort, homeDir);
+        super(serverControllerAddress, serverPort, normalizeHomeDir(homeDir));
+    }
+
+    private static String normalizeHomeDir(String homeDir) {
+        String selected = homeDir == null || homeDir.trim().isEmpty() ? "/" : homeDir.trim();
+        return new File(selected).getAbsoluteFile().toPath().normalize().toString();
     }
 
     @Override

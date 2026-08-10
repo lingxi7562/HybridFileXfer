@@ -3,4 +3,9 @@
     <color name="fond">@color/white</color>
     <color name="blue_background_dark">#8AB4F8</color>
     <color name="blue_background_light">#394456</color>
+    <color name="primary">#AFC6FF</color>
+    <color name="primary_dark">#799DFF</color>
+    <color name="secondary">#78D9BE</color>
+    <color name="surface">#171A21</color>
+    <color name="background">#101218</color>
 </resources>

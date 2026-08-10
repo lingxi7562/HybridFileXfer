@@ -1,7 +1,5 @@
 package top.weixiansen574.hybridfilexfer.core.bean;
 
-import org.jetbrains.annotations.NotNull;
-
 import java.io.File;
 
 public class RemoteFile {
@@ -41,7 +39,6 @@ public class RemoteFile {
     }
 
 
-    @NotNull
     @Override
     public String toString() {
         return "RemoteFile{" +

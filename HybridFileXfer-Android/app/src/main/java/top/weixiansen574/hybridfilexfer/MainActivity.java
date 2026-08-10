@@ -21,10 +21,12 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Spinner;
 import android.widget.Toast;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -34,19 +36,26 @@ import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import rikka.shizuku.Shizuku;
 import top.weixiansen574.async.BackstageTask;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
 import top.weixiansen574.hybridfilexfer.core.bean.ServerNetInterface;
+import top.weixiansen574.hybridfilexfer.core.HFXService;
 import top.weixiansen574.hybridfilexfer.droidcore.HFXServer;
 import top.weixiansen574.hybridfilexfer.droidcore.StartServerTask;
 import top.weixiansen574.hybridfilexfer.droidcore.callback.StartServerCallback;
 import top.weixiansen574.hybridfilexfer.listadapter.NetCardsAdapter;
+import top.weixiansen574.hybridfilexfer.network.NearbyTransferDiscovery;
+import top.weixiansen574.hybridfilexfer.share.WebShareActivity;
 
 public class MainActivity extends AppCompatActivity implements View.OnClickListener, ServiceConnection {
     public static final int REQUEST_CODE_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION = 1;
@@ -56,10 +65,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private Spinner spinnerMode;
     Button startServerBtn;
     Button toTransfer;
+    TextView serverStatus;
     Context context;
     private boolean isShizuku = false;
     private HFXServer server;
     private Config config;
+    private NearbyTransferDiscovery nearbyDiscovery;
+    private boolean serviceBound;
+    private boolean destroyed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,10 +80,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         setContentView(R.layout.activity_main);
         context = this;
         config = Config.getInstance(context);
+        nearbyDiscovery = new NearbyTransferDiscovery(context);
         startServerBtn = findViewById(R.id.start_server);
         startServerBtn.setOnClickListener(this);
         toTransfer = findViewById(R.id.to_transfer);
         toTransfer.setOnClickListener(this);
+        serverStatus = findViewById(R.id.server_status);
+        findViewById(R.id.connect_phone).setOnClickListener(this);
+        findViewById(R.id.share_by_qr).setOnClickListener(this);
         spinnerMode = findViewById(R.id.spinner_mode);
         findViewById(R.id.refresh).setOnClickListener(this);
 
@@ -85,6 +102,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         } catch (IOException e) {
             Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
             startServerBtn.setEnabled(false);
+            findViewById(R.id.refresh).setEnabled(false);
         }
 
         spinnerMode.setSelection(config.getMode());
@@ -114,7 +132,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         } else if (id == R.id.to_transfer) {
             startActivityForResult(new Intent(context, TransferActivity.class), REQUEST_CODE_TRANSFER);
         } else if (id == R.id.refresh) {
-            if (server == null) {
+            if (server == null && netCardsAdapter != null) {
                 try {
                     netCardsAdapter.reload();
                 } catch (SocketException | UnknownHostException e) {
@@ -123,10 +141,17 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             } else {
                 Toast.makeText(context, R.string.qing_xian_ting_zhi_fu_wu_duan, Toast.LENGTH_SHORT).show();
             }
+        } else if (id == R.id.connect_phone) {
+            startClient();
+        } else if (id == R.id.share_by_qr) {
+            startActivity(new Intent(context, WebShareActivity.class));
         }
     }
 
     public void startServer() {
+        if (netCardsAdapter == null) {
+            return;
+        }
         if (checkPermissionOrRequest()) {
             Toast.makeText(context, R.string.xu_yao_wen_jian_du_xie_quan_xian, Toast.LENGTH_LONG).show();
             return;
@@ -157,43 +182,83 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     private void bindAndStartService() {
+        NotificationPermissionHelper.requestOnce(this);
         netCardsAdapter.setEnableModify(false);
         startServerBtn.setEnabled(false);
         startServerBtn.setText(R.string.ting_zhi_fu_wu);
+        serverStatus.setText(R.string.server_status_waiting);
+        if (!DirectTransferKeepAliveService.start(
+                context, DirectTransferKeepAliveService.OWNER_SERVER)) {
+            Toast.makeText(context, R.string.direct_keep_alive_failed,
+                    Toast.LENGTH_LONG).show();
+        }
         if (isShizuku) {
-            Shizuku.bindUserService(IOService.getUserServiceArgs(context), this);
+            try {
+                serviceBound = true;
+                Shizuku.bindUserService(IOService.getUserServiceArgs(context), this);
+            } catch (RuntimeException e) {
+                serviceBound = false;
+                changeToStartState();
+            }
         } else {
-            Intent intent = new Intent(context, IOService.class);
-            bindService(intent, this, Service.BIND_AUTO_CREATE);
+            try {
+                Intent intent = new Intent(context, IOService.class);
+                serviceBound = bindService(intent, this, Service.BIND_AUTO_CREATE);
+            } catch (RuntimeException e) {
+                serviceBound = false;
+            }
+            if (!serviceBound) {
+                changeToStartState();
+            }
         }
     }
 
     private void unbindService() {
-        if (isShizuku) {
-            Shizuku.unbindUserService(IOService.getUserServiceArgs(context), this, true);
-        } else {
-            unbindService(this);
+        if (!serviceBound) {
+            return;
+        }
+        serviceBound = false;
+        try {
+            if (isShizuku) {
+                Shizuku.unbindUserService(IOService.getUserServiceArgs(context), this, true);
+            } else {
+                unbindService(this);
+            }
+        } catch (RuntimeException ignored) {
         }
     }
 
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
+        serviceBound = true;
+        if (destroyed) {
+            unbindService();
+            return;
+        }
         IIOService iioService = IIOService.Stub.asInterface(service);
+        if (iioService == null) {
+            changeToStartState();
+            return;
+        }
         server = new HFXServer(iioService);
         StartServerCallback callback = new StartServerCallback() {
             @Override
             public void onBindFailed(int port) {
+                if (destroyed) {
+                    return;
+                }
                 Toast.makeText(context, getString(R.string.service_start_failed, port), Toast.LENGTH_SHORT).show();
-                netCardsAdapter.setEnableModify(true);
-                startServerBtn.setEnabled(true);
-                startServerBtn.setText(R.string.qi_dong_fu_wu_qi_bing_deng_dai_lian_jie);
-                server = null;
+                changeToStartState();
             }
 
             @Override
             public void onStatedServer() {
+                if (destroyed) {
+                    return;
+                }
                 startServerBtn.setEnabled(true);
                 Toast.makeText(context, R.string.fu_wu_yi_qi_dong, Toast.LENGTH_SHORT).show();
+                nearbyDiscovery.advertise(config.getServerPort());
                 for (ServerNetInterface selectedInterface : netCardsAdapter.getSelectedInterfaces()) {
                     netCardsAdapter.changeItemState(selectedInterface.name, getString(R.string.deng_dai_lian_jie));
                 }
@@ -201,22 +266,32 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
             @Override
             public void onAccepted(String name) {
-                netCardsAdapter.changeItemState(name, getString(R.string.yi_lian_jie));
+                if (!destroyed) {
+                    netCardsAdapter.changeItemState(name, getString(R.string.yi_lian_jie));
+                }
             }
 
             @Override
             public void onAcceptFailed(String name) {
-                netCardsAdapter.changeItemState(name, getString(R.string.lian_jie_shi_bai));
+                if (!destroyed) {
+                    netCardsAdapter.changeItemState(name, getString(R.string.lian_jie_shi_bai));
+                }
             }
 
             @Override
             public void onPcOOM() {
+                if (destroyed) {
+                    return;
+                }
                 Toast.makeText(context, R.string.dui_fang_nei_cun_bu_zu, Toast.LENGTH_LONG).show();
                 changeToStartState();
             }
 
             @Override
             public void onMeOOM(int created, int localBufferCount) {
+                if (destroyed) {
+                    return;
+                }
                 Toast.makeText(context, getString(R.string.buffer_block_creation_failed_toast,
                         created, localBufferCount), Toast.LENGTH_LONG).show();
                 changeToStartState();
@@ -224,15 +299,22 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
             @Override
             public void onConnectSuccess() {
+                if (destroyed) {
+                    return;
+                }
                 toTransfer.setEnabled(true);
+                toTransfer.setVisibility(View.VISIBLE);
+                serverStatus.setText(R.string.server_status_connected);
                 //设置静态实例，使得传输Activity能使用
                 HFXServer.instance = server;
-                //TODO 国际化
                 startServerBtn.setText(R.string.duan_kai_lian_jie);
             }
 
             @Override
             public void onError(Throwable th) {
+                if (destroyed) {
+                    return;
+                }
                 Toast.makeText(context, R.string.fu_wu_yi_ting_zhi, Toast.LENGTH_SHORT).show();
                 changeToStartState();
             }
@@ -243,7 +325,32 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
-        System.out.println("onServiceDisconnected");
+        serviceBound = false;
+        HFXServer disconnectedServer = server;
+        HFXServer.instance = null;
+        nearbyDiscovery.stopAdvertising();
+        DirectTransferKeepAliveService.stop(
+                context, DirectTransferKeepAliveService.OWNER_SERVER);
+        server = null;
+        if (disconnectedServer != null) {
+            // Binder death can happen while accept() is waiting. Close the listener
+            // immediately, then finish the remaining cleanup off the UI thread.
+            disconnectedServer.closeServerSocket();
+            disconnectedServer.disconnect(new BackstageTask.BaseEventHandler() {
+                @Override
+                public void onError(Throwable th) {
+                    // The UI below already reports the disconnected state.
+                }
+            });
+        }
+        if (destroyed) {
+            return;
+        }
+        netCardsAdapter.setEnableModify(true);
+        startServerBtn.setEnabled(true);
+        startServerBtn.setText(R.string.receive_from_phone);
+        serverStatus.setText(R.string.server_status_idle);
+        toTransfer.setVisibility(View.GONE);
     }
 
     private boolean checkPermissionOrRequest() {
@@ -348,16 +455,33 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                         return;
                     }
 
-                    int localCount = Integer.parseInt(localCountStr);
-                    int remoteCount = Integer.parseInt(remoteCountStr);
+                    int localCount;
+                    int remoteCount;
+                    try {
+                        localCount = Integer.parseInt(localCountStr);
+                        remoteCount = Integer.parseInt(remoteCountStr);
+                    } catch (NumberFormatException e) {
+                        editLocalCount.setError(getString(R.string.invalid_buffer_count));
+                        return;
+                    }
 
                     // 校验是否大于 16
-                    if (localCount <= 16) {
+                    if (localCount < 16) {
                         editLocalCount.setError(getString(R.string.zui_xiao_ke_she_zhi_16));
                         return;
                     }
-                    if (remoteCount <= 16) {
+                    if (remoteCount < 16) {
                         editRemoteCount.setError(getString(R.string.zui_xiao_ke_she_zhi_16));
+                        return;
+                    }
+                    if (localCount > HFXService.MAX_BUFFER_COUNT) {
+                        editLocalCount.setError(getString(R.string.buffer_count_too_large,
+                                HFXService.MAX_BUFFER_COUNT));
+                        return;
+                    }
+                    if (remoteCount > HFXService.MAX_BUFFER_COUNT) {
+                        editRemoteCount.setError(getString(R.string.buffer_count_too_large,
+                                HFXService.MAX_BUFFER_COUNT));
                         return;
                     }
 
@@ -387,6 +511,28 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         editMainDir.setText(Environment.getExternalStorageDirectory().getAbsolutePath());
         Spinner spinner = view.findViewById(R.id.spinner_mode);
         spinner.setSelection(config.getClientIOMode());
+        Spinner nearbySpinner = view.findViewById(R.id.spinner_nearby_servers);
+        TextView discoveryStatus = view.findViewById(R.id.text_discovery_status);
+        ArrayList<NearbyTransferDiscovery.Device> nearbyDevices = new ArrayList<>();
+        ArrayList<String> nearbyLabels = new ArrayList<>();
+        Map<String, NearbyTransferDiscovery.Device> nearbyByAddress = new LinkedHashMap<>();
+        ArrayAdapter<String> nearbyAdapter = new ArrayAdapter<>(context,
+                android.R.layout.simple_spinner_item, nearbyLabels);
+        nearbyAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        nearbySpinner.setAdapter(nearbyAdapter);
+        nearbySpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View selectedView, int position, long id) {
+                if (position >= 0 && position < nearbyDevices.size()) {
+                    NearbyTransferDiscovery.Device device = nearbyDevices.get(position);
+                    editIp.setText(device.address);
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
         AlertDialog dialog = new AlertDialog.Builder(context)
                 .setView(view)
                 .setTitle(R.string.connect_to_server)
@@ -394,14 +540,77 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 .setPositiveButton(R.string.ok, null)
                 .show();
 
+        nearbyDiscovery.discover(new NearbyTransferDiscovery.Callback() {
+            @Override
+            public void onStarted() {
+                runOnUiThread(() -> discoveryStatus.setText(R.string.searching_nearby_devices));
+            }
+
+            @Override
+            public void onFound(NearbyTransferDiscovery.Device device) {
+                runOnUiThread(() -> {
+                    if (!dialog.isShowing()) {
+                        return;
+                    }
+                    nearbyByAddress.entrySet().removeIf(entry ->
+                            entry.getValue().name.equals(device.name));
+                    nearbyByAddress.put(device.address, device);
+                    rebuildNearbyList();
+                    if (nearbyDevices.size() == 1) {
+                        nearbySpinner.setSelection(0);
+                        editIp.setText(device.address);
+                    }
+                });
+            }
+
+            @Override
+            public void onLost(String name) {
+                runOnUiThread(() -> {
+                    if (!dialog.isShowing()) {
+                        return;
+                    }
+                    nearbyByAddress.entrySet().removeIf(entry ->
+                            entry.getValue().name.equals(name));
+                    rebuildNearbyList();
+                });
+            }
+
+            @Override
+            public void onError() {
+                runOnUiThread(() -> discoveryStatus.setText(R.string.nearby_discovery_failed));
+            }
+
+            private void rebuildNearbyList() {
+                nearbyDevices.clear();
+                nearbyDevices.addAll(nearbyByAddress.values());
+                nearbyLabels.clear();
+                for (NearbyTransferDiscovery.Device item : nearbyDevices) {
+                    nearbyLabels.add(item.displayLabel());
+                }
+                nearbyAdapter.notifyDataSetChanged();
+                if (nearbyDevices.isEmpty()) {
+                    discoveryStatus.setText(R.string.nearby_devices_empty);
+                } else {
+                    discoveryStatus.setText(getString(R.string.nearby_devices_found,
+                            nearbyDevices.size()));
+                }
+            }
+        });
+        dialog.setOnDismissListener(ignored -> nearbyDiscovery.stopDiscovery());
+
         dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String ip = editIp.getText().toString();
+            String ip = editIp.getText().toString().trim();
             if (TextUtils.isEmpty(ip)) {
                 editIp.setError(getString(R.string.please_enter_the_server_ip));
                 return;
             }
-            if (TextUtils.isEmpty(editMainDir.getText())) {
+            String homeDir = editMainDir.getText().toString().trim();
+            if (TextUtils.isEmpty(homeDir)) {
                 editMainDir.setError(getString(R.string.please_enter_the_home_dir));
+                return;
+            }
+            if (!new File(homeDir).isAbsolute()) {
+                editMainDir.setError(getString(R.string.home_dir_must_be_absolute));
                 return;
             }
             int mode = spinner.getSelectedItemPosition();
@@ -415,7 +624,10 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             Intent intent = new Intent(context, ClientActivity.class);
             intent.putExtra("io_mode", spinner.getSelectedItemPosition());
             intent.putExtra("controller_ip", ip);
-            intent.putExtra("home_dir", editMainDir.getText().toString());
+            NearbyTransferDiscovery.Device discovered = nearbyByAddress.get(ip);
+            intent.putExtra("server_port", discovered == null
+                    ? config.getServerPort() : discovered.port);
+            intent.putExtra("home_dir", homeDir);
             startActivity(intent);
             dialog.dismiss();
         });
@@ -432,7 +644,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 return true;
             }
         }
-        System.out.println("Shizuku UID:" + Shizuku.getUid());
         if (mode == 1) {
             if (Shizuku.getUid() != 0) {
                 new AlertDialog.Builder(context)
@@ -475,34 +686,53 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     private void changeToStartState() {
+        nearbyDiscovery.stopAdvertising();
+        DirectTransferKeepAliveService.stop(
+                context, DirectTransferKeepAliveService.OWNER_SERVER);
         netCardsAdapter.setEnableModify(true);
         startServerBtn.setEnabled(true);
-        startServerBtn.setText(R.string.qi_dong_fu_wu_qi_bing_deng_dai_lian_jie);
+        startServerBtn.setText(R.string.receive_from_phone);
+        serverStatus.setText(R.string.server_status_idle);
+        toTransfer.setVisibility(View.GONE);
+        HFXServer.instance = null;
         server = null;
         unbindService();
     }
 
     private void disconnect(boolean toast) {
         startServerBtn.setEnabled(false);
-        if (HFXServer.instance == null) {
-            server.closeServerSocket();
-        } else {
-            server.disconnect(new BackstageTask.BaseEventHandler() {
+        server.disconnect(new BackstageTask.BaseEventHandler() {
+                @Override
+                public void onError(Throwable th) {
+                    if (!destroyed) {
+                        Toast.makeText(context, R.string.fu_wu_yi_ting_zhi,
+                                Toast.LENGTH_SHORT).show();
+                        changeToStartState();
+                    }
+                }
+
                 @Override
                 public void onComplete() {
+                    if (destroyed) {
+                        return;
+                    }
                     if (toast) {
                         Toast.makeText(context, R.string.fu_wu_yi_guan_bi, Toast.LENGTH_SHORT).show();
                     }
+                    DirectTransferKeepAliveService.stop(
+                            context, DirectTransferKeepAliveService.OWNER_SERVER);
                     unbindService();
                     netCardsAdapter.setEnableModify(true);
                     toTransfer.setEnabled(false);
-                    startServerBtn.setText(R.string.qi_dong_fu_wu_qi_bing_deng_dai_lian_jie);
+                    toTransfer.setVisibility(View.GONE);
+                    serverStatus.setText(R.string.server_status_idle);
+                    startServerBtn.setText(R.string.receive_from_phone);
                     startServerBtn.setEnabled(true);
                     HFXServer.instance = null;
+                    nearbyDiscovery.stopAdvertising();
                     server = null;
                 }
-            });
-        }
+        });
     }
 
     private long getAvailableMemoryMB() {
@@ -522,9 +752,34 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     @Override
     protected void onDestroy() {
-        if (HFXServer.instance != null) {
-            HFXServer.instance.disconnect(new BackstageTask.BaseEventHandler() {
+        destroyed = true;
+        nearbyDiscovery.close();
+        HFXServer current = server;
+        server = null;
+        HFXServer.instance = null;
+        boolean unbindNow = true;
+        if (current != null) {
+            unbindNow = false;
+            current.disconnect(new BackstageTask.BaseEventHandler() {
+                    @Override
+                    public void onError(Throwable th) {
+                        DirectTransferKeepAliveService.stop(
+                                context, DirectTransferKeepAliveService.OWNER_SERVER);
+                        unbindService();
+                    }
+
+                    @Override
+                    public void onComplete() {
+                        DirectTransferKeepAliveService.stop(
+                                context, DirectTransferKeepAliveService.OWNER_SERVER);
+                        unbindService();
+                    }
             });
+        }
+        if (unbindNow) {
+            DirectTransferKeepAliveService.stop(
+                    context, DirectTransferKeepAliveService.OWNER_SERVER);
+            unbindService();
         }
         super.onDestroy();
     }

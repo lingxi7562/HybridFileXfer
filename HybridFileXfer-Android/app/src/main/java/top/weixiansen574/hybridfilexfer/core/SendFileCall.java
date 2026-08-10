@@ -1,5 +1,6 @@
 package top.weixiansen574.hybridfilexfer.core;
 
+import java.io.IOException;
 import java.util.concurrent.Callable;
 
 import top.weixiansen574.hybridfilexfer.core.callback.TransferFileCallback;
@@ -10,12 +11,15 @@ public class SendFileCall implements Callable<Void> {
     private final DataByteChannel channel;
     private final TransferConnection connection;
     private final TransferFileCallback callback;
+    private final ChannelFailureTracker failureTracker;
 
-    public SendFileCall(ReadFileCall readFileCall, TransferConnection connection, TransferFileCallback callback) {
+    public SendFileCall(ReadFileCall readFileCall, TransferConnection connection,
+                        TransferFileCallback callback, ChannelFailureTracker failureTracker) {
         this.readFileCall = readFileCall;
         this.connection = connection;
         this.channel = connection.channel;
         this.callback = callback;
+        this.failureTracker = failureTracker;
         connection.resetTotalTrafficInfo();
     }
 
@@ -63,11 +67,27 @@ public class SendFileCall implements Callable<Void> {
                 channel.write(fileBlock.data);
                 readFileCall.recycleBuffer(fileBlock.data);
                 connection.addUploadedBytes(fileBlock.getLength());
+                // The next take can be interrupted. Do not leave a reference to a
+                // buffer which has already returned to the shared pool, otherwise
+                // the exception path can recycle the same buffer a second time.
+                fileBlock = null;
             }
+        } catch (IOException e) {
+            boolean canContinue = failureTracker.onFailure(connection);
+            if (fileBlock != null) {
+                if (canContinue && fileBlock.fileIndex >= 0) {
+                    readFileCall.retryBlock(fileBlock);
+                } else if (fileBlock.data != null) {
+                    readFileCall.recycleBuffer(fileBlock.data);
+                }
+                if (!canContinue) {
+                    readFileCall.shutdownByConnectionBreak();
+                }
+            }
+            callback.onChannelError(connection.iName,TransferFileCallback.ERROR_TYPE_EXCEPTION, e.toString());
+            return null;
         } catch (Exception e) {
-            //若发生异常，通知其他传输通道，停止传输
-            if (fileBlock != null){
-                //回收文件分块的ByteBuffer，否则导致这个Buffer免费了
+            if (fileBlock != null && fileBlock.data != null) {
                 readFileCall.recycleBuffer(fileBlock.data);
             }
             readFileCall.shutdownByConnectionBreak();

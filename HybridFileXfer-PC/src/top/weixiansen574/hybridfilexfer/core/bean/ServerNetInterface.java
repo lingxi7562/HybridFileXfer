@@ -1,8 +1,6 @@
 package top.weixiansen574.hybridfilexfer.core.bean;
 
 
-import org.jetbrains.annotations.NotNull;
-
 import java.net.InetAddress;
 
 public class ServerNetInterface{
@@ -17,7 +15,6 @@ public class ServerNetInterface{
     }
 
 
-    @NotNull
     @Override
     public String toString() {
         return "ServerNetInterface{" +

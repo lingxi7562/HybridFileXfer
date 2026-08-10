@@ -18,18 +18,18 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.IOException;
-import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
-import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import top.weixiansen574.hybridfilexfer.NetCardIcon;
 import top.weixiansen574.hybridfilexfer.core.bean.ServerNetInterface;
 import top.weixiansen574.hybridfilexfer.R;
+import top.weixiansen574.hybridfilexfer.network.NetworkRouteResolver;
 
 public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHolder> {
 
@@ -60,6 +60,7 @@ public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHo
 
         holder.editClientBindIP.setEnabled(enableModify && enableBindIpInput);
         holder.cbEnable.setEnabled(enableModify);
+        holder.cbEnable.setOnCheckedChangeListener(null);
         holder.cbEnable.setChecked(itemServerNetInterface.enable);
 
 
@@ -67,24 +68,9 @@ public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHo
             itemServerNetInterface.enable = isChecked;
         });
 
+        holder.boundItem = null;
         holder.editClientBindIP.setText(itemServerNetInterface.clientBindAddress);
-
-        holder.editClientBindIP.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                itemServerNetInterface.clientBindAddress = s.toString();
-            }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-
-            }
-        });
+        holder.boundItem = itemServerNetInterface;
 
     }
 
@@ -102,17 +88,6 @@ public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHo
             }
         }
     }
-
-    @Override
-    public int getItemViewType(int position) {
-        return position;
-    }
-
-    @Override
-    public long getItemId(int position) {
-        return position;
-    }
-
 
     @SuppressLint("NotifyDataSetChanged")
     public void setEnableModify(boolean enableModify) {
@@ -154,6 +129,7 @@ public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHo
         TextView txvIP;
         EditText editClientBindIP;
         ImageView imgInterfaceType;
+        ItemServerNetInterface boundItem;
 
         public ViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -162,21 +138,39 @@ public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHo
             txvIP = itemView.findViewById(R.id.txv_interface_ip);
             editClientBindIP = itemView.findViewById(R.id.edit_client_bind_ip);
             imgInterfaceType = itemView.findViewById(R.id.img_interface_type);
+            editClientBindIP.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                }
+
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    if (boundItem != null) {
+                        boundItem.clientBindAddress = s.toString();
+                    }
+                }
+
+                @Override
+                public void afterTextChanged(Editable s) {
+                }
+            });
         }
     }
 
     public static class ItemServerNetInterface {
 
-        boolean enable = true;
+        boolean enable;
         String name;
         InetAddress address;
         String clientBindAddress = "";
         String state;
 
-        public ItemServerNetInterface(String name, InetAddress address, String state) {
+        public ItemServerNetInterface(String name, InetAddress address, String state,
+                                      boolean enable) {
             this.name = name;
             this.state = state;
             this.address = address;
+            this.enable = enable;
         }
 
         public ServerNetInterface toServerNetInterface() throws UnknownHostException {
@@ -187,25 +181,29 @@ public class NetCardsAdapter extends RecyclerView.Adapter<NetCardsAdapter.ViewHo
 
     private ArrayList<ItemServerNetInterface> getNetInterfaces() throws SocketException, UnknownHostException {
         ArrayList<ItemServerNetInterface> netInterfaceList = new ArrayList<>();
-        netInterfaceList.add(new ItemServerNetInterface("USB_ADB", InetAddress.getByName("127.0.0.1"), context.getString(R.string.not_run)));
-        Enumeration<NetworkInterface> networkInterfaces = NetworkInterface.getNetworkInterfaces();
-        while (networkInterfaces.hasMoreElements()) {
-            NetworkInterface networkInterface = networkInterfaces.nextElement();
-            //System.out.println(networkInterface.getDisplayName());
-            Enumeration<InetAddress> inetAddresses = networkInterface.getInetAddresses();
-            while (inetAddresses.hasMoreElements()) {
-                InetAddress address = inetAddresses.nextElement();
-                if (!address.isLoopbackAddress() && address instanceof Inet4Address
-                        && !networkInterface.getDisplayName().startsWith("rmnet_data"/*数据流量除外*/)) {
-                    ItemServerNetInterface item = new ItemServerNetInterface(networkInterface.getDisplayName(), address, context.getString(R.string.not_run));
-                    //VPN开的虚拟网卡，默认不勾选
-                    if (item.name.startsWith("tun")) {
-                        item.enable = false;
-                    }
-                    netInterfaceList.add(item);
-                    System.out.println(networkInterface.getDisplayName() + "  " + address);
-                }
+        // ADB is opt-in. Enabling loopback by default is the main reason direct
+        // phone-to-phone sessions used to fail without a computer in the middle.
+        netInterfaceList.add(new ItemServerNetInterface("USB_ADB",
+                InetAddress.getByName("127.0.0.1"),
+                context.getString(R.string.not_run), false));
+        List<NetworkRouteResolver.LocalAddress> localAddresses =
+                NetworkRouteResolver.getLocalIpv4Addresses(context);
+        Map<String, Integer> interfaceAddressCounts = new HashMap<>();
+        for (NetworkRouteResolver.LocalAddress localAddress : localAddresses) {
+            interfaceAddressCounts.put(localAddress.interfaceName,
+                    interfaceAddressCounts.getOrDefault(localAddress.interfaceName, 0) + 1);
+        }
+        for (NetworkRouteResolver.LocalAddress localAddress : localAddresses) {
+            String channelName = localAddress.interfaceName;
+            if (interfaceAddressCounts.get(channelName) > 1) {
+                channelName += "@" + localAddress.address.getHostAddress();
             }
+            netInterfaceList.add(new ItemServerNetInterface(
+                    channelName,
+                    localAddress.address,
+                    context.getString(localAddress.vpn
+                            ? R.string.network_vpn_detected : R.string.not_run),
+                    localAddress.isDefaultEnabled()));
         }
         return netInterfaceList;
     }

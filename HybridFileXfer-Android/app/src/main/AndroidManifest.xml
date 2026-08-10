@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission
@@ -23,7 +28,26 @@
         tools:targetApi="31" >
         <activity
             android:name=".ClientActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
             android:exported="false" />
+
+        <activity
+            android:name=".share.WebShareActivity"
+            android:exported="false" />
+
+        <service
+            android:name=".share.WebShareService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
+        <service
+            android:name=".DirectTransferKeepAliveService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="true" />
 
         <service
             android:name=".IOService"
@@ -41,6 +65,7 @@
 
         <activity
             android:name=".TransferActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
             android:exported="false"
             android:theme="@style/Theme.HybridFileXfer2.NoActionBar" />
         <!--
@@ -51,6 +76,7 @@
         -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
             android:exported="true" >
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

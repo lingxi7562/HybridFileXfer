@@ -4,10 +4,12 @@ import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
@@ -18,11 +20,15 @@ import top.weixiansen574.nio.DataByteChannel;
 
 public abstract class HFXClient extends HFXService {
 
+    private static final int CONTROL_CONNECT_TIMEOUT_MS = 10_000;
+    private static final int TRANSFER_CONNECT_TIMEOUT_MS = 4_000;
+
     protected final String serverControllerAddress;
     protected final int serverPort;
     protected final String homeDir;
-    protected boolean isRun = true;
+    protected volatile boolean isRun = true;
     protected ClientCallBack callBack;
+    private volatile SocketChannel pendingConnectChannel;
 
     public HFXClient(String serverControllerAddress, int serverPort,String homeDir) {
         this.serverControllerAddress = serverControllerAddress;
@@ -31,11 +37,14 @@ public abstract class HFXClient extends HFXService {
     }
 
     public boolean connect(ConnectServerCallback callback) throws IOException {
+        byte[] sessionToken = new byte[SESSION_TOKEN_SIZE];
         try {
             //System.out.println("正在连接控制通道：" + serverControllerAddress);
             callback.onConnectingControlChannel(serverControllerAddress, serverPort);
-            ctChannel = new DataByteChannel(SocketChannel
-                    .open(new InetSocketAddress(serverControllerAddress,serverPort)));
+            InetAddress controllerAddress = InetAddress.getByName(serverControllerAddress);
+            ctChannel = new DataByteChannel(openConnectedChannel(
+                    controllerAddress, null, CONTROL_CONNECT_TIMEOUT_MS),
+                    HANDSHAKE_IDLE_TIMEOUT_MS);
 
             ctChannel.write(CLIENT_HEADER.getBytes(StandardCharsets.UTF_8));
             ctChannel.writeInt(VERSION_CODE);
@@ -45,24 +54,43 @@ public abstract class HFXClient extends HFXService {
                 ctChannel.close();
                 return false;
             }
+            ctChannel.readFully(sessionToken);
         } catch (IOException e) {
+            closeQuietly(ctChannel);
+            closeConnections();
             //System.out.println("控制通道连接到手机失败，请检查手机的服务端是否启动？");
             callback.onConnectControlFailed();
             return false;
         }
         int ipCount = ctChannel.readInt();
+        if (ipCount <= 0 || ipCount > MAX_INTERFACE_COUNT) {
+            callback.onProtocolError("Invalid network interface count: " + ipCount);
+            closeQuietly(ctChannel);
+            return false;
+        }
         String[] names = new String[ipCount];
         InetAddress[] addresses = new InetAddress[ipCount];
         InetAddress[] bindAddresses = new InetAddress[ipCount];
 
         for (int i = 0; i < ipCount; i++) {
             String name = ctChannel.readUTF();
-            byte[] address = new byte[ctChannel.readByte()];
+            int addressLength = ctChannel.readByte() & 0xFF;
+            if (addressLength != 4 && addressLength != 16) {
+                callback.onProtocolError("Invalid transfer address length: " + addressLength);
+                closeQuietly(ctChannel);
+                return false;
+            }
+            byte[] address = new byte[addressLength];
             ctChannel.readFully(address);
             InetAddress inetAddress = InetAddress.getByAddress(address);
-            byte l46 = ctChannel.readByte();
+            int l46 = ctChannel.readByte() & 0xFF;
             InetAddress bindAddress = null;
             if (l46 != 0) {
+                if (l46 != 4 && l46 != 16) {
+                    callback.onProtocolError("Invalid bind address length: " + l46);
+                    closeQuietly(ctChannel);
+                    return false;
+                }
                 byte[] bAddress = new byte[l46];
                 ctChannel.readFully(bAddress);
                 bindAddress = InetAddress.getByAddress(bAddress);
@@ -71,9 +99,10 @@ public abstract class HFXClient extends HFXService {
             addresses[i] = inetAddress;
             bindAddresses[i] = bindAddress;
         }
-        connections = new ArrayList<>(ipCount);
+        connections = Collections.synchronizedList(new ArrayList<>(ipCount));
         for (int i = 0; i < ipCount; i++) {
-            SocketChannel socketChannel;
+            SocketChannel socketChannel = null;
+            DataByteChannel transferChannel = null;
             String name = names[i];
             InetAddress inetAddress = addresses[i];
             InetAddress bindAddress = bindAddresses[i];
@@ -87,28 +116,61 @@ public abstract class HFXClient extends HFXService {
                 return false;
             }*/
             try {
-                if (bindAddress == null) {
-                    socketChannel = SocketChannel.open(new InetSocketAddress(inetAddress, serverPort));
-                } else {
-                    socketChannel = SocketChannel.open();
-                    socketChannel.bind(new InetSocketAddress(bindAddress, 0));
-                    socketChannel.connect(new InetSocketAddress(inetAddress, serverPort));
-                }
-                connections.add(new TransferConnection(name, new DataByteChannel(socketChannel)));
+                socketChannel = openConnectedChannel(
+                        inetAddress, bindAddress, TRANSFER_CONNECT_TIMEOUT_MS);
+                transferChannel = new DataByteChannel(
+                        socketChannel, HANDSHAKE_IDLE_TIMEOUT_MS);
+                writeTransferHandshake(transferChannel, sessionToken, name);
             } catch (IOException e) {
+                closeQuietly(transferChannel);
+                if (transferChannel == null && socketChannel != null) {
+                    try {
+                        socketChannel.close();
+                    } catch (IOException ignored) {
+                    }
+                }
                 callback.onConnectTransferChannelFailed(name,inetAddress, e);
                 ctChannel.writeBoolean(false);
                 ctChannel.writeUTF(name);
-                ctChannel.close();
-                return false;
+                ctChannel.readBoolean();
+                continue;
             }
-            ctChannel.writeBoolean(true);
-            ctChannel.writeUTF(name);
-            ctChannel.readBoolean();
+            try {
+                ctChannel.writeBoolean(true);
+                ctChannel.writeUTF(name);
+                if (ctChannel.readBoolean()) {
+                    if (!isRun) {
+                        throw new IOException("Client is closed");
+                    }
+                    transferChannel.setIdleTimeoutMillis(TRANSFER_IDLE_TIMEOUT_MS);
+                    connections.add(new TransferConnection(name, transferChannel));
+                    transferChannel = null;
+                } else {
+                    callback.onConnectTransferChannelFailed(name, inetAddress,
+                            new IOException("Transfer channel rejected by server"));
+                }
+            } finally {
+                closeQuietly(transferChannel);
+            }
+        }
+        if (connections.isEmpty()) {
+            callback.onNoTransferChannels();
+            closeQuietly(ctChannel);
+            return false;
         }
         //初始化缓冲区块
         int bufferCount = ctChannel.readInt();
+        if (bufferCount < 16 || bufferCount > MAX_BUFFER_COUNT) {
+            callback.onProtocolError("Invalid transfer buffer count: " + bufferCount);
+            ctChannel.writeBoolean(false);
+            closeConnections();
+            closeQuietly(ctChannel);
+            return false;
+        }
         for (int i = 0; i < bufferCount; i++) {
+            if (!isRun) {
+                throw new IOException("Client is closed");
+            }
             ByteBuffer buffer = createBuffer(FileBlock.BLOCK_SIZE);
             if (buffer != null){
                 buffers.add(buffer);
@@ -123,6 +185,8 @@ public abstract class HFXClient extends HFXService {
                 freeBuffers();
                 callback.onOOM(i, bufferCount, availableMemoryMB, arch);
                 ctChannel.writeBoolean(false);
+                closeConnections();
+                closeQuietly(ctChannel);
                 return false;
             }
         }
@@ -130,15 +194,26 @@ public abstract class HFXClient extends HFXService {
         if (!ctChannel.readBoolean()) {
             //System.out.println("连接失败，手机端内存不足，请调小缓存区块数");
             callback.onRemoteOOM();
+            closeConnections();
+            closeQuietly(ctChannel);
             return false;
         }
         //返回文件系统信息给对方
         ctChannel.writeInt(Directory.getCurrentFileSystem());
         //返回主路径信息给对方
         ctChannel.writeUTF(homeDir);
+        if (!isRun) {
+            throw new IOException("Client is closed");
+        }
+        // Control traffic may legitimately be idle for hours after the handshake.
+        ctChannel.setIdleTimeoutMillis(0);
         //System.out.println("传输通道已全部连接完成");
-        List<String> channelNames = new ArrayList<>(connections.size());
-        for (TransferConnection connection : connections) {
+        List<TransferConnection> connectionSnapshot;
+        synchronized (connections) {
+            connectionSnapshot = new ArrayList<>(connections);
+        }
+        List<String> channelNames = new ArrayList<>(connectionSnapshot.size());
+        for (TransferConnection connection : connectionSnapshot) {
             channelNames.add(connection.iName);
         }
         callback.onConnectSuccess(channelNames);
@@ -149,30 +224,136 @@ public abstract class HFXClient extends HFXService {
 
     public abstract long getAvailableMemoryMB();
 
+    /**
+     * Hook used by Android to pin a socket to the physical LAN behind a VPN.
+     * Desktop clients keep the platform default routing behaviour.
+     */
+    protected void prepareSocket(Socket socket, InetAddress remoteAddress,
+                                 InetAddress bindAddress) throws IOException {
+    }
+
+    protected boolean shouldRetryWithoutPreferredNetwork() {
+        return false;
+    }
+
+    private SocketChannel openConnectedChannel(InetAddress remoteAddress,
+                                                InetAddress bindAddress,
+                                                int timeoutMs) throws IOException {
+        try {
+            return openConnectedChannelAttempt(
+                    remoteAddress, bindAddress, timeoutMs, true);
+        } catch (IOException preferredRouteError) {
+            if (!isRun || !shouldRetryWithoutPreferredNetwork()) {
+                throw preferredRouteError;
+            }
+            try {
+                return openConnectedChannelAttempt(
+                        remoteAddress, bindAddress, timeoutMs, false);
+            } catch (IOException defaultRouteError) {
+                defaultRouteError.addSuppressed(preferredRouteError);
+                throw defaultRouteError;
+            }
+        }
+    }
+
+    private SocketChannel openConnectedChannelAttempt(InetAddress remoteAddress,
+                                                       InetAddress bindAddress,
+                                                       int timeoutMs,
+                                                       boolean preferNetwork) throws IOException {
+        if (!isRun) {
+            throw new IOException("Client is closed");
+        }
+        SocketChannel channel = SocketChannel.open();
+        pendingConnectChannel = channel;
+        boolean connected = false;
+        try {
+            Socket socket = channel.socket();
+            socket.setKeepAlive(true);
+            socket.setTcpNoDelay(true);
+            if (preferNetwork) {
+                prepareSocket(socket, remoteAddress, bindAddress);
+            }
+            if (bindAddress != null) {
+                socket.bind(new InetSocketAddress(bindAddress, 0));
+            }
+            socket.connect(new InetSocketAddress(remoteAddress, serverPort), timeoutMs);
+            if (!isRun) {
+                throw new IOException("Client is closed");
+            }
+            connected = true;
+            return channel;
+        } finally {
+            if (pendingConnectChannel == channel) {
+                pendingConnectChannel = null;
+            }
+            if (!connected) {
+                channel.close();
+            }
+        }
+    }
+
+    private void closeConnections() {
+        List<TransferConnection> current = connections;
+        if (current == null) {
+            return;
+        }
+        List<TransferConnection> snapshot;
+        synchronized (current) {
+            snapshot = new ArrayList<>(current);
+            current.clear();
+        }
+        for (TransferConnection connection : snapshot) {
+            try {
+                connection.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private static void closeQuietly(DataByteChannel channel) {
+        if (channel == null) {
+            return;
+        }
+        try {
+            channel.close();
+        } catch (IOException ignored) {
+        }
+    }
+
     public void start(ClientCallBack transferFileCallback) throws Exception {
         this.callBack = transferFileCallback;
         //LOOP
         while (isRun) {
-            short id = ctChannel.readShort();
-            switch (id) {
-                case ControllerIdentifiers.LIST_FILES:
-                    handleListFiles();
-                    break;
-                case ControllerIdentifiers.DELETE_FILE:
-                    handleDeleteFile();
-                    break;
-                case ControllerIdentifiers.MKDIR:
-                    handleMkdir();
-                    break;
-                case ControllerIdentifiers.REQUEST_RECEIVE:
-                    handleReceiveFiles();
-                    break;
-                case ControllerIdentifiers.REQUEST_SEND:
-                    handleSendFiles();
-                    break;
-                case ControllerIdentifiers.SHUTDOWN:
-                    handleShutdown();
-                    break;
+            int commandHighByte = ctChannel.readUnsignedByte();
+            ctChannel.setIdleTimeoutMillis(HANDSHAKE_IDLE_TIMEOUT_MS);
+            try {
+                short id = (short) ((commandHighByte << 8) | ctChannel.readUnsignedByte());
+                switch (id) {
+                    case ControllerIdentifiers.LIST_FILES:
+                        handleListFiles();
+                        break;
+                    case ControllerIdentifiers.DELETE_FILE:
+                        handleDeleteFile();
+                        break;
+                    case ControllerIdentifiers.MKDIR:
+                        handleMkdir();
+                        break;
+                    case ControllerIdentifiers.REQUEST_RECEIVE:
+                        handleReceiveFiles();
+                        break;
+                    case ControllerIdentifiers.REQUEST_SEND:
+                        handleSendFiles();
+                        break;
+                    case ControllerIdentifiers.SHUTDOWN:
+                        handleShutdown();
+                        break;
+                    default:
+                        throw new IOException("Unknown controller command: " + id);
+                }
+            } finally {
+                if (isRun) {
+                    ctChannel.setIdleTimeoutMillis(0);
+                }
             }
         }
     }
@@ -214,20 +395,8 @@ public abstract class HFXClient extends HFXService {
 
     private void handleShutdown() {
         isRun = false;
-        try {
-            ctChannel.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        if (connections != null) {
-            for (TransferConnection transferConnection : connections) {
-                try {
-                    transferConnection.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
+        closeQuietly(ctChannel);
+        closeConnections();
         callBack.onExit();
         //System.out.println("收到停止指令，客户端已正常关闭！");
     }
@@ -287,17 +456,32 @@ public abstract class HFXClient extends HFXService {
 
     private void handleReceiveFiles() throws IOException {
         //System.out.println("准备接收");
+        String destinationPath = ctChannel.readUTF();
+        int destinationFileSystem = ctChannel.readInt();
+        if (destinationFileSystem != Directory.getCurrentFileSystem()) {
+            throw new IOException("Invalid destination file system");
+        }
+        Directory destination = new Directory(destinationPath, destinationFileSystem);
         callBack.onReceiving();
-        isRun = receiveFiles(callBack);
+        isRun = receiveFiles(destination, callBack);
     }
 
     private void handleSendFiles() throws IOException {
         int listSize = ctChannel.readInt();
+        if (listSize < 0 || listSize > MAX_FILE_ENTRIES) {
+            throw new IOException("Invalid file list size: " + listSize);
+        }
         List<RemoteFile> fileList = new ArrayList<>(listSize);
         for (int i = 0; i < listSize; i++) {
             fileList.add(new RemoteFile(new File(ctChannel.readUTF())));
         }
-        Directory remoteDir = new Directory(ctChannel.readUTF(), ctChannel.readInt());//对方的localDir
+        String remotePath = ctChannel.readUTF();
+        int remoteFileSystem = ctChannel.readInt();
+        if (remoteFileSystem != Directory.FILE_SYSTEM_UNIX
+                && remoteFileSystem != Directory.FILE_SYSTEM_WINDOWS) {
+            throw new IOException("Invalid remote file system");
+        }
+        Directory remoteDir = new Directory(remotePath, remoteFileSystem);//对方的localDir
         Directory localDir = new Directory(ctChannel.readUTF(), Directory.getCurrentFileSystem());//对方为remoteDir
         callBack.onSending();
         isRun = sendFiles(fileList,localDir,remoteDir,callBack);
@@ -305,6 +489,19 @@ public abstract class HFXClient extends HFXService {
 
     protected void freeBuffers(){
         buffers.clear();
+    }
+
+    public void close() {
+        isRun = false;
+        SocketChannel pending = pendingConnectChannel;
+        if (pending != null) {
+            try {
+                pending.close();
+            } catch (IOException ignored) {
+            }
+        }
+        closeQuietly(ctChannel);
+        closeConnections();
     }
 
 }

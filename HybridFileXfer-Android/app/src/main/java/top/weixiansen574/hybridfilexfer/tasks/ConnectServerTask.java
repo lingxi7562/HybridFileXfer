@@ -15,12 +15,14 @@ public class ConnectServerTask extends BackstageTask<ConnectServerTask.Callback>
     @Override
     protected void onStart(Callback callback) throws Throwable {
         if (!client.connect(callback)) {
+            client.close();
             client.freeBuffers();
         }
     }
 
     @Override
     protected void onError(Throwable th) {
+        client.close();
         client.freeBuffers();
     }
 

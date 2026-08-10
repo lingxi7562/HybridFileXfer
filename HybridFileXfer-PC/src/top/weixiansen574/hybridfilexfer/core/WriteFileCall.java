@@ -1,24 +1,31 @@
 package top.weixiansen574.hybridfilexfer.core;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.LinkedBlockingDeque;
-
-import top.weixiansen574.hybridfilexfer.core.callback.TransferFileCallback;
 
 public abstract class WriteFileCall implements Callable<Void> {
     private final LinkedBlockingDeque<ByteBuffer> buffers;
     private final boolean[] channelFinished;
     private final ArrayList<LinkedList<FileBlock>> dequeArray;
-    private boolean canceled = false;
+    private final Map<Integer, FileIdentity> identities = new HashMap<>();
+    private final Map<String, Integer> pathOwners = new HashMap<>();
+    private boolean canceled;
 
     public WriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
         this.buffers = buffers;
         dequeArray = new ArrayList<>(dequeCount);
-        channelFinished = new boolean[dequeCount];  // 初始化通道结束状态
+        channelFinished = new boolean[dequeCount];
         for (int i = 0; i < dequeCount; i++) {
             dequeArray.add(new LinkedList<>());
         }
@@ -26,176 +33,278 @@ public abstract class WriteFileCall implements Callable<Void> {
 
     @Override
     public Void call() throws Exception {
+        FileBlock lastBlock = null;
+        FileChannel openChannel = null;
+        ByteBuffer pendingBuffer = null;
+        long cursor = 0;
+        List<FileBlock> directories = new ArrayList<>();
         try {
-            FileBlock block = takeBlock();
-            FileBlock lastBlock = null;
-            /*File lastFile = null;
-            RandomAccessFile lastRaf = null;*/
-            FileChannel lastChannel = null;
-            long cursor = 0;
-
-            while (block != null) {
+            FileBlock block;
+            while ((block = takeBlock()) != null) {
+                pendingBuffer = block.data;
                 if (block.isDirectory()) {
-                    //File file = new File(block.path);
-                    String file = block.path;
-                    tryMkdirs(file);
-                    setLastModified(file, block.lastModified);
-                    block = takeBlock();
+                    tryMkdirs(block.path);
+                    directories.add(block);
+                    pendingBuffer = null;
                     continue;
                 }
-                //创建文件的父目录，如果不存在，保证后续文件能够创建
-                createParentDirIfNotExists(block.path);
-                //RandomAccessFile raf;
-                FileChannel channel;
-                //如果上个文件与当前
+
                 if (lastBlock == null || !lastBlock.path.equals(block.path)) {
-                    if (lastChannel != null) {
+                    if (openChannel != null) {
                         closeFile();
+                        openChannel = null;
                         setLastModified(lastBlock.path, lastBlock.lastModified);
                     }
-                    /*raf = new RandomAccessFile(file, "rw");
-                    raf.setLength(block.totalSize);
-                    channel = raf.getChannel();*/
-                    channel = createAndOpenFile(block.path, block.totalSize);
+                    createParentDirIfNotExists(block.path);
+                    openChannel = createAndOpenFile(block.path, block.totalSize);
                     cursor = 0;
-                } else {
-                    //raf = lastRaf;
-                    channel = lastChannel;
                 }
-                //如果上个指针与当前指针不不一致就进行seek操作
+
                 if (cursor != block.getStartPosition()) {
                     cursor = block.getStartPosition();
-                    channel.position(cursor);
+                    openChannel.position(cursor);
                 }
-                 /*   logSeek(block);
-                } else {
-                    logBlock(block);
-                }*/
 
                 ByteBuffer data = block.data;
                 data.flip();
-                channel.write(data);
-                cursor += data.position();
-                //回收缓冲区块
-                buffers.add(block.data);
+                while (data.hasRemaining()) {
+                    int written = openChannel.write(data);
+                    if (written == 0) {
+                        Thread.yield();
+                    }
+                }
+                cursor += block.getLength();
+                recycleBuffer(data);
+                pendingBuffer = null;
                 lastBlock = block;
-                /*lastFile = file;
-                lastRaf = raf;*/
-                lastChannel = channel;
-                block = takeBlock();
             }
-            if (lastBlock != null) {
+
+            if (openChannel != null) {
                 closeFile();
+                openChannel = null;
                 setLastModified(lastBlock.path, lastBlock.lastModified);
             }
-        } catch (IOException e){
+            // Child creation changes parent timestamps, so restore directories last.
+            for (int i = directories.size() - 1; i >= 0; i--) {
+                FileBlock directory = directories.get(i);
+                setLastModified(directory.path, directory.lastModified);
+            }
+            validateAllFilesComplete();
+        } catch (Exception e) {
+            recycleBuffer(pendingBuffer);
             cancel();
+            if (openChannel != null) {
+                try {
+                    closeFile();
+                } catch (Exception ignored) {
+                }
+            }
             throw e;
         }
         return null;
-    }
-
-    private void logSeek(FileBlock block) {
-        System.out.printf("seek: %d %s %d %d %d%n",
-                block.getStartPosition(), block.path, block.totalSize, block.index, block.getLength());
-    }
-
-    private void logBlock(FileBlock block) {
-        System.out.printf("%s %d %d %d%n",
-                block.path, block.totalSize, block.index, block.getLength());
     }
 
     public ByteBuffer getBuffer() throws InterruptedException {
         return buffers.take();
     }
 
-    // 新增方法：标记通道结束
-    public synchronized void finishChannel(int tIndex) {
-        channelFinished[tIndex] = true;
-        notify();  // 唤醒可能阻塞的写线程
+    public synchronized void finishChannel(int transferIndex) {
+        if (transferIndex >= 0 && transferIndex < channelFinished.length) {
+            channelFinished[transferIndex] = true;
+        }
+        notifyAll();
     }
 
-    public synchronized void cancel(){
+    public synchronized void cancel() {
+        if (canceled) {
+            return;
+        }
         canceled = true;
-        //回收未写入硬盘的块的ByteBuffer
         for (LinkedList<FileBlock> deque : dequeArray) {
             for (FileBlock fileBlock : deque) {
-                if (fileBlock.data != null){
-                    buffers.add(fileBlock.data);
-                }
+                recycleBuffer(fileBlock.data);
+            }
+            deque.clear();
+        }
+        identities.clear();
+        pathOwners.clear();
+        notifyAll();
+    }
+
+    public synchronized void putBlock(FileBlock block, int transferIndex) throws IOException {
+        if (canceled) {
+            recycleBuffer(block.data);
+            return;
+        }
+        if (transferIndex < 0 || transferIndex >= dequeArray.size()) {
+            recycleBuffer(block.data);
+            cancel();
+            return;
+        }
+        validateMetadata(block);
+        dequeArray.get(transferIndex).add(block);
+        notifyAll();
+    }
+
+    private void validateMetadata(FileBlock block) throws IOException {
+        if (block.fileIndex < 0 || block.fileIndex >= HFXService.MAX_FILE_ENTRIES
+                || block.path == null || block.path.isEmpty()) {
+            throw new IOException("Invalid file identity");
+        }
+        if (block.isFile()) {
+            long blockCount = block.calcBlockCount();
+            if (blockCount > HFXService.MAX_BLOCKS_PER_FILE
+                    || block.index < 0 || block.index >= blockCount) {
+                throw new IOException("Invalid file block index");
+            }
+            long remainder = block.totalSize % FileBlock.BLOCK_SIZE;
+            int expectedLength;
+            if (block.totalSize == 0) {
+                expectedLength = 0;
+            } else if (block.index == blockCount - 1 && remainder != 0) {
+                expectedLength = (int) remainder;
+            } else {
+                expectedLength = FileBlock.BLOCK_SIZE;
+            }
+            if (block.getLength() != expectedLength) {
+                throw new IOException("Invalid file block length");
+            }
+        } else if (block.index != 0 || block.totalSize != 0 || block.data != null) {
+            throw new IOException("Invalid directory metadata");
+        }
+
+        FileIdentity identity = identities.get(block.fileIndex);
+        if (identity == null) {
+            String pathKey = File.separatorChar == '\\'
+                    ? block.path.toLowerCase(Locale.ROOT) : block.path;
+            Integer owner = pathOwners.get(pathKey);
+            if (owner != null && owner != block.fileIndex) {
+                throw new IOException("Multiple files use the same destination path");
+            }
+            pathOwners.put(pathKey, block.fileIndex);
+            identity = new FileIdentity(block);
+            identities.put(block.fileIndex, identity);
+        } else if (!identity.matches(block)) {
+            throw new IOException("Inconsistent metadata for file index " + block.fileIndex);
+        }
+        identity.record(block);
+    }
+
+    private synchronized void validateAllFilesComplete() throws IOException {
+        if (canceled) {
+            throw new IOException("File writing was canceled");
+        }
+        for (FileIdentity identity : identities.values()) {
+            if (!identity.complete()) {
+                throw new IOException("Missing blocks for destination file: " + identity.path);
             }
         }
-        notify();
     }
 
-    // 修改后的putBlock（保持原有逻辑）
-    public synchronized void putBlock(FileBlock block, int tIndex) {
-        //System.out.println("put:"+block.index+" "+tIndex);
-        dequeArray.get(tIndex).add(block);
-        notify();  // 唤醒可能阻塞的写线程
+    public void recycleBuffer(ByteBuffer buffer) {
+        if (buffer != null) {
+            buffers.add(buffer);
+        }
     }
 
-
-    // 重构后的takeBlock（实现阻塞等待）
     private synchronized FileBlock takeBlock() throws InterruptedException {
         while (true) {
             FileBlock block = tryTakeBlockInternal();
-
-            if (block != null) return block;
-
-            //检查终止条件：所有通道结束 + 所有队列为空
+            if (block != null) {
+                return block;
+            }
             if (canceled || (allChannelsFinished() && allQueuesEmpty())) {
                 return null;
             }
-
-            wait();  // 阻塞等待直到被唤醒
+            wait();
         }
     }
 
     public synchronized FileBlock tryTakeBlockInternal() {
         FileBlock minHead = null;
-        int mdqIndex = -1;
-
+        int minDequeIndex = -1;
         for (int i = 0; i < dequeArray.size(); i++) {
             LinkedList<FileBlock> deque = dequeArray.get(i);
             if (!deque.isEmpty()) {
                 FileBlock head = deque.getFirst();
                 if (minHead == null || head.compareTo(minHead) < 0) {
                     minHead = head;
-                    mdqIndex = i;
+                    minDequeIndex = i;
                 }
             }
         }
         if (minHead != null) {
-            dequeArray.get(mdqIndex).removeFirst();
+            dequeArray.get(minDequeIndex).removeFirst();
         }
         return minHead;
     }
 
     private boolean allChannelsFinished() {
         for (boolean finished : channelFinished) {
-            if (!finished) return false;
+            if (!finished) {
+                return false;
+            }
         }
         return true;
     }
 
-    // 辅助方法：检查所有队列是否为空
     private boolean allQueuesEmpty() {
         for (LinkedList<FileBlock> deque : dequeArray) {
-            if (!deque.isEmpty()) return false;
+            if (!deque.isEmpty()) {
+                return false;
+            }
         }
         return true;
     }
 
     private void setLastModified(String file, long time) throws Exception {
-        if (!setFileLastModified(file,time)) {
-            System.out.println("Warning! file cannot set last modified:" + file);
+        if (!setFileLastModified(file, time)) {
+            System.out.println("Warning! file cannot set last modified: " + file);
         }
     }
 
     protected abstract void createParentDirIfNotExists(String path) throws Exception;
+
     protected abstract void tryMkdirs(String path) throws Exception;
-    protected abstract FileChannel createAndOpenFile(String path,long length) throws Exception;
+
+    protected abstract FileChannel createAndOpenFile(String path, long length) throws Exception;
+
     protected abstract void closeFile() throws Exception;
-    protected abstract boolean setFileLastModified(String path,long time) throws Exception;
+
+    protected abstract boolean setFileLastModified(String path, long time) throws Exception;
+
+    private static final class FileIdentity {
+        final boolean file;
+        final String path;
+        final long lastModified;
+        final long totalSize;
+        final int expectedBlocks;
+        final BitSet receivedBlocks;
+
+        FileIdentity(FileBlock block) {
+            file = block.isFile();
+            path = block.path;
+            lastModified = block.lastModified;
+            totalSize = block.totalSize;
+            expectedBlocks = file ? (int) block.calcBlockCount() : 0;
+            receivedBlocks = file ? new BitSet() : null;
+        }
+
+        boolean matches(FileBlock block) {
+            return file == block.isFile()
+                    && path.equals(block.path)
+                    && lastModified == block.lastModified
+                    && totalSize == block.totalSize;
+        }
+
+        void record(FileBlock block) {
+            if (file) {
+                receivedBlocks.set(block.index);
+            }
+        }
+
+        boolean complete() {
+            return !file || receivedBlocks.cardinality() == expectedBlocks;
+        }
+    }
 }

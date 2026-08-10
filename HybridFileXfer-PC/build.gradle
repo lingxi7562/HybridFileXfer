@@ -1,0 +1,31 @@
+plugins {
+    id 'java'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src']
+            include '**/*.java'
+        }
+        resources {
+            srcDirs = ['src']
+            include '**/*.properties'
+            include 'META-INF/**'
+        }
+    }
+}
+
+tasks.named('jar') {
+    archiveBaseName = 'HybridFileXfer-PC'
+    manifest {
+        attributes('Main-Class': 'top.weixiansen574.hybridfilexfer.Main')
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

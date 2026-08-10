@@ -40,16 +40,53 @@ public class DroidWriteFileCall extends WriteFileCall {
     @Override
     protected FileChannel createAndOpenFile(String path, long length) throws Exception {
         pfd = ioService.createAndOpenWriteableFile(path, length);
-        fileOutputStream = new FileOutputStream(pfd.getFileDescriptor());
-        channel = fileOutputStream.getChannel();
-        return channel;
+        if (pfd == null) {
+            throw new IOException("Unable to open destination file: " + path);
+        }
+        try {
+            fileOutputStream = new FileOutputStream(pfd.getFileDescriptor());
+            channel = fileOutputStream.getChannel();
+            return channel;
+        } catch (Exception e) {
+            try {
+                pfd.close();
+            } catch (IOException closeError) {
+                e.addSuppressed(closeError);
+            }
+            pfd = null;
+            throw e;
+        }
     }
 
     @Override
     protected void closeFile() throws Exception {
-        channel.close();
-        fileOutputStream.close();
-        pfd.close();
+        IOException failure = null;
+        try {
+            if (fileOutputStream != null) {
+                fileOutputStream.close();
+            }
+        } catch (IOException e) {
+            failure = e;
+        } finally {
+            fileOutputStream = null;
+            channel = null;
+        }
+        try {
+            if (pfd != null) {
+                pfd.close();
+            }
+        } catch (IOException e) {
+            if (failure == null) {
+                failure = e;
+            } else {
+                failure.addSuppressed(e);
+            }
+        } finally {
+            pfd = null;
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     @Override

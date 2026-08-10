@@ -4,6 +4,9 @@ import android.app.ActivityManager;
 import android.content.Context;
 
 import java.nio.ByteBuffer;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.Socket;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingDeque;
 
@@ -14,6 +17,7 @@ import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
+import top.weixiansen574.hybridfilexfer.network.NetworkRouteResolver;
 
 public class DroidHFXClient extends HFXClient {
     private final IIOService iioService;
@@ -43,6 +47,18 @@ public class DroidHFXClient extends HFXClient {
         long availableMemoryMB = availableMemory / (1024 * 1024);
 
         return (long) (availableMemoryMB - (totalMemoryMB * 0.05));
+    }
+
+    @Override
+    protected void prepareSocket(Socket socket, InetAddress remoteAddress,
+                                 InetAddress bindAddress) throws IOException {
+        NetworkRouteResolver.bindSocketToBestNetwork(
+                context.getApplicationContext(), socket, remoteAddress, bindAddress);
+    }
+
+    @Override
+    protected boolean shouldRetryWithoutPreferredNetwork() {
+        return true;
     }
 
     @Override
