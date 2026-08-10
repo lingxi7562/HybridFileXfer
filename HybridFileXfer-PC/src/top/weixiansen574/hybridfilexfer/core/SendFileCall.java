@@ -34,6 +34,7 @@ public class SendFileCall implements Callable<Void> {
                 if (fileBlock.fileIndex == -1) {
                     if (fileBlock == ReadFileCall.END_POINT) {
                         channel.writeShort(TransferIdentifiers.EOF);
+                        channel.writeInt(readFileCall.getCompletedFileCount());
                         callback.onChannelComplete(connection.iName,
                                 connection.getTotalTraffic().uploadTraffic,
                                 System.currentTimeMillis() - startTime);

@@ -32,6 +32,7 @@ public abstract class ReadFileCall implements Callable<Void> {
     private final Object stateLock = new Object();
     private final Set<String> transferPaths = new HashSet<>();
     private volatile boolean canceled;
+    private volatile int completedFileCount = -1;
     private int fileIndex = -1;
 
     public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files,
@@ -58,6 +59,7 @@ public abstract class ReadFileCall implements Callable<Void> {
             }
             synchronized (stateLock) {
                 if (!canceled) {
+                    completedFileCount = fileIndex + 1;
                     for (int i = 0; i < operateThreadCount; i++) {
                         deque.add(END_POINT);
                     }
@@ -201,6 +203,14 @@ public abstract class ReadFileCall implements Callable<Void> {
 
     public FileBlock takeBlock() throws InterruptedException {
         return deque.take();
+    }
+
+    public int getCompletedFileCount() throws IOException {
+        int count = completedFileCount;
+        if (count < 0 || count > HFXService.MAX_FILE_ENTRIES) {
+            throw new IOException("File enumeration did not complete");
+        }
+        return count;
     }
 
     public void shutdownByWriteError() {

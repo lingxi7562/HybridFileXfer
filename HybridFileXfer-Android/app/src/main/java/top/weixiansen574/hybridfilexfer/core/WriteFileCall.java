@@ -20,6 +20,7 @@ public abstract class WriteFileCall implements Callable<Void> {
     private final ArrayList<LinkedList<FileBlock>> dequeArray;
     private final Map<Integer, FileIdentity> identities = new HashMap<>();
     private final Map<String, Integer> pathOwners = new HashMap<>();
+    private int expectedFileCount = -1;
     private boolean canceled;
 
     public WriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
@@ -115,6 +116,18 @@ public abstract class WriteFileCall implements Callable<Void> {
         notifyAll();
     }
 
+    public synchronized void finishChannel(int transferIndex, int fileCount) throws IOException {
+        if (fileCount < 0 || fileCount > HFXService.MAX_FILE_ENTRIES) {
+            throw new IOException("Invalid completed file count: " + fileCount);
+        }
+        if (expectedFileCount < 0) {
+            expectedFileCount = fileCount;
+        } else if (expectedFileCount != fileCount) {
+            throw new IOException("Transfer channels disagree on completed file count");
+        }
+        finishChannel(transferIndex);
+    }
+
     public synchronized void cancel() {
         if (canceled) {
             return;
@@ -193,6 +206,18 @@ public abstract class WriteFileCall implements Callable<Void> {
     private synchronized void validateAllFilesComplete() throws IOException {
         if (canceled) {
             throw new IOException("File writing was canceled");
+        }
+        if (expectedFileCount < 0) {
+            throw new IOException("No transfer channel completed normally");
+        }
+        if (identities.size() != expectedFileCount) {
+            throw new IOException("Missing destination entries: expected "
+                    + expectedFileCount + ", received " + identities.size());
+        }
+        for (int fileIndex = 0; fileIndex < expectedFileCount; fileIndex++) {
+            if (!identities.containsKey(fileIndex)) {
+                throw new IOException("Missing destination file index: " + fileIndex);
+            }
         }
         for (FileIdentity identity : identities.values()) {
             if (!identity.complete()) {

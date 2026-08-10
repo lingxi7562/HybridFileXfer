@@ -90,7 +90,7 @@ public class ReceiveFileCall implements Callable<Void> {
                     }
                     case TransferIdentifiers.EOF:
                         //System.out.println(iName + " 接收完成");
-                        writeFileCall.finishChannel(tIndex);
+                        writeFileCall.finishChannel(tIndex, channel.readInt());
                         callback.onChannelComplete(iName,
                                 connection.getTotalTraffic().downloadTraffic,
                                 System.currentTimeMillis() - startTime);
