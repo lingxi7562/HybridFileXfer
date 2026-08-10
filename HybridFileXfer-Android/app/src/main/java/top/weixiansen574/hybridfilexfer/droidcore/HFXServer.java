@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import top.weixiansen574.async.BackstageTask;
 import top.weixiansen574.hybridfilexfer.NativeMemory;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
+import top.weixiansen574.hybridfilexfer.aidl.ParcelableRemoteFile;
 import top.weixiansen574.hybridfilexfer.core.ControllerIdentifiers;
 import top.weixiansen574.hybridfilexfer.core.FileBlock;
 import top.weixiansen574.hybridfilexfer.core.HFXService;
@@ -511,7 +512,7 @@ public class HFXServer extends HFXService {
         }
         ArrayList<RemoteFile> remoteFiles = new ArrayList<>();
         for (int chunkId : chunkIds) {
-            List<RemoteFile> slice = ioService.getAndRemoveFileListSlice(chunkId);
+            List<ParcelableRemoteFile> slice = ioService.getAndRemoveFileListSlice(chunkId);
             if (slice == null) {
                 throw new RemoteException("Missing file-list slice: " + chunkId);
             }
