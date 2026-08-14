@@ -11,7 +11,7 @@ on:
   merge_group:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
@@ -80,3 +80,45 @@ jobs:
           path: HybridFileXfer-PC/build/libs/HybridFileXfer-PC.jar
           if-no-files-found: error
           compression-level: 9
+
+      - name: Package Windows distribution
+        if: success()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DIST="HybridFileXfer-windows-x64"
+          rm -rf "$DIST" "HybridFileXfer-windows-x64.zip"
+          mkdir -p "$DIST"
+          cp HybridFileXfer-PC/build/libs/HybridFileXfer-PC.jar "$DIST/HybridFileXfer.jar"
+          cp HybridFileXfer-PC/adb.exe HybridFileXfer-PC/AdbWinApi.dll HybridFileXfer-PC/AdbWinUsbApi.dll "$DIST/"
+          cp HybridFileXfer-PC/HybridFileXferLauncher.exe "$DIST/" || true
+          cp HybridFileXfer-PC/start.exe "$DIST/" || true
+          cp "script/一键启动.bat" "$DIST/一键启动.bat"
+          cp README.md "$DIST/README.md"
+          zip -r "HybridFileXfer-windows-x64.zip" "$DIST"
+
+      - name: Upload Windows distribution
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HybridFileXfer-windows-x64-${{ github.sha }}
+          path: HybridFileXfer-windows-x64.zip
+          if-no-files-found: error
+          compression-level: 9
+
+      - name: Publish GitHub release
+        if: success() && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          FILES=(HybridFileXfer-windows-x64.zip)
+          while IFS= read -r f; do
+            FILES+=("$f")
+          done < <(find HybridFileXfer-Android/app/build/outputs/apk -type f -name '*.apk' | sort)
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" "${FILES[@]}" --repo "${{ github.repository }}" --generate-notes
+          fi

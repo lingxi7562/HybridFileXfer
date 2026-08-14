@@ -109,6 +109,16 @@ java -jar HybridFileXfer.jar -c adb -d C:\Users\Administrator\Desktop\
 java -jar HybridFileXfer.jar -c 192.168.1.2
 ```
 
+### Windows 一键启动
+
+发行版压缩包内已附带 `一键启动.bat`，解压后双击即可选择：
+
+- `1`：ADB 有线连接（自动检测/选择设备）
+- `2`：无线网络连接（输入手机 IP）
+- `3`：退出
+
+也可以直接使用仓库中的 `script/一键启动.bat`。脚本会自动检查 Java 环境，并优先使用同目录下的 `adb.exe`。
+
 **电脑输出**
 
 ```
