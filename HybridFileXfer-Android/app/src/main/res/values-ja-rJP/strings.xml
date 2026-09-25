@@ -210,4 +210,5 @@
     <string name="error_reading_file_title">ファイルの読み取り中にエラーが発生しました</string>
     <string name="error_writing_file_title">ファイルの書き込み中にエラーが発生しました</string>
     <string name="error_occurred">エラーが発生しました</string>
+    <string name="connection_lost">接続が切断されました</string>
 </resources>

@@ -208,4 +208,5 @@
     <string name="error_reading_file_title">读取文件时发生错误</string>
     <string name="error_writing_file_title">写入文件时发生错误</string>
     <string name="error_occurred">发生错误</string>
+    <string name="connection_lost">连接已断开</string>
 </resources>

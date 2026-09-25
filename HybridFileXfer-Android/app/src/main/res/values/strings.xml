@@ -209,4 +209,5 @@
     <string name="error_reading_file_title">Error occurred while reading file</string>
     <string name="error_writing_file_title">Error occurred while writing file</string>
     <string name="error_occurred">An error occurred</string>
+    <string name="connection_lost">Connection lost</string>
 </resources>

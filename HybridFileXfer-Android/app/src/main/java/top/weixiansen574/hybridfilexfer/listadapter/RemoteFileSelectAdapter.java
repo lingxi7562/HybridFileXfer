@@ -72,7 +72,7 @@ public class RemoteFileSelectAdapter extends FileSelectAdapter {
     private void onConnectionLost() {
         context.setResult(MainActivity.RESULT_CODE_SERVER_DISCONNECT);
         new AlertDialog.Builder(context)
-                .setTitle(R.string.chuang_jian_shi_bai)
+                .setTitle(R.string.connection_lost)
                 .setMessage(R.string.kong_tong_dao_de_lian_jie_yi_duan_kai__)
                 .setCancelable(false)
                 .setPositiveButton(R.string.ok, (dialog, which) -> context.finish()).show();

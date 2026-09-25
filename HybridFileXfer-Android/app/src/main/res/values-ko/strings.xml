@@ -209,4 +209,5 @@
     <string name="error_reading_file_title">파일을 읽는 중 오류가 발생했습니다</string>
     <string name="error_writing_file_title">파일을 쓰는 중 오류가 발생했습니다</string>
     <string name="error_occurred">오류가 발생했습니다</string>
+    <string name="connection_lost">연결이 끊어졌습니다</string>
 </resources>
