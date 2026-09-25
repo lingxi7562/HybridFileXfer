@@ -21,6 +21,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Optional release signing material. Add these repository secrets to produce a
+      # signed, installable release APK:
+      #   HFX_KEYSTORE_BASE64    base64 of the .jks/.keystore file
+      #   HFX_KEYSTORE_PASSWORD  keystore password
+      #   HFX_KEY_ALIAS          key alias
+      #   HFX_KEY_PASSWORD       key password
+      # Without them the release APK is unsigned and tagging is refused.
+      HFX_KEYSTORE_BASE64: ${{ secrets.HFX_KEYSTORE_BASE64 }}
+      HFX_KEYSTORE_PASSWORD: ${{ secrets.HFX_KEYSTORE_PASSWORD }}
+      HFX_KEY_ALIAS: ${{ secrets.HFX_KEY_ALIAS }}
+      HFX_KEY_PASSWORD: ${{ secrets.HFX_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -45,6 +57,14 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0 cmake;3.10.2.4988404 ndk;25.1.8937393'
+
+      - name: Provide release keystore
+        if: ${{ env.HFX_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$HFX_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "HFX_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
       - name: Validate, test, and build Android and desktop artifacts
         working-directory: HybridFileXfer-Android
@@ -113,6 +133,14 @@ jobs:
         run: |
           set -euxo pipefail
           TAG="${GITHUB_REF_NAME}"
+          RELEASE_APK="HybridFileXfer-Android/app/build/outputs/apk/release/app-release.apk"
+          # An unsigned APK cannot be installed, so never publish one: a tag build
+          # without the signing secrets must fail instead of silently shipping a
+          # download that no user can install.
+          if [ ! -f "$RELEASE_APK" ]; then
+            echo "::error::No signed release APK at $RELEASE_APK. Configure the HFX_KEYSTORE_BASE64, HFX_KEYSTORE_PASSWORD, HFX_KEY_ALIAS and HFX_KEY_PASSWORD repository secrets, then re-run."
+            exit 1
+          fi
           FILES=(HybridFileXfer-windows-x64.zip)
           while IFS= read -r f; do
             FILES+=("$f")

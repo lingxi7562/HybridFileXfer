@@ -202,4 +202,12 @@
     <string name="nearby_discovery_failed">自動検索を利用できません。受信側のIPを手動で入力してください。</string>
     <string name="invalid_buffer_count">有効な整数を入力してください</string>
     <string name="buffer_count_too_large">最大 %1$d ブロックです</string>
+    <string name="missing_launch_extras">起動パラメータがありません</string>
+    <string name="transfer_complete_avg_speed">転送完了！平均速度：%1$s</string>
+    <string name="error_reading_file">ファイルの読み取りエラー</string>
+    <string name="error_writing_file">ファイルの書き込みエラー</string>
+    <string name="transfer_failed">転送に失敗しました</string>
+    <string name="error_reading_file_title">ファイルの読み取り中にエラーが発生しました</string>
+    <string name="error_writing_file_title">ファイルの書き込み中にエラーが発生しました</string>
+    <string name="error_occurred">エラーが発生しました</string>
 </resources>

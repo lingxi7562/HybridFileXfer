@@ -366,7 +366,7 @@ public class TransferActivity extends AppCompatActivity {
 
         @Override
         public void onChannelComplete(String iName, long traffic, long time) {
-            transferDialog.showEvent(iName, String.format("传输完毕！平均速度：%s",
+            transferDialog.showEvent(iName, context.getString(R.string.transfer_complete_avg_speed,
                     time == 0 ? "∞" : Utils.formatSpeed(traffic / time * 1000)));
         }
 
@@ -380,20 +380,20 @@ public class TransferActivity extends AppCompatActivity {
                     transferDialog.showEvent(iName, context.getString(R.string.transmission_interrupted));
                     break;
                 case TransferFileCallback.ERROR_TYPE_READ_ERROR:
-                    transferDialog.showEvent(iName, "读取文件时出错");
+                    transferDialog.showEvent(iName, context.getString(R.string.error_reading_file));
                     break;
                 case TransferFileCallback.ERROR_TYPE_WRITE_ERROR:
-                    transferDialog.showEvent(iName, "写入文件时出错");
+                    transferDialog.showEvent(iName, context.getString(R.string.error_writing_file));
                     break;
             }
         }
 
         @Override
         public void onReadFileError(String message) {
-            transferDialog.setTitle("传输失败");
+            transferDialog.setTitle(context.getString(R.string.transfer_failed));
             transferDialog.setCloseBtnEnable(true);
             new AlertDialog.Builder(context)
-                    .setTitle("读取文件时发生错误")
+                    .setTitle(R.string.error_reading_file_title)
                     .setMessage(message)
                     .setPositiveButton(R.string.ok, null)
                     .show();
@@ -401,10 +401,10 @@ public class TransferActivity extends AppCompatActivity {
 
         @Override
         public void onWriteFileError(String message) {
-            transferDialog.setTitle("传输失败");
+            transferDialog.setTitle(context.getString(R.string.transfer_failed));
             transferDialog.setCloseBtnEnable(true);
             new AlertDialog.Builder(context)
-                    .setTitle("写入文件时发生错误")
+                    .setTitle(R.string.error_writing_file_title)
                     .setMessage(message)
                     .setPositiveButton(R.string.ok, null)
                     .show();
@@ -429,7 +429,7 @@ public class TransferActivity extends AppCompatActivity {
         public void onError(Throwable th) {
             transferDialog.dismiss();
             new AlertDialog.Builder(context)
-                    .setTitle("发生错误")
+                    .setTitle(R.string.error_occurred)
                     .setMessage(th.toString())
                     .setPositiveButton(R.string.ok, null)
                     .setOnDismissListener(dialog -> context.finish())

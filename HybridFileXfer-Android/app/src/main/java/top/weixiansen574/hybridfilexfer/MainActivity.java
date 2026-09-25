@@ -700,8 +700,16 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     private void disconnect(boolean toast) {
+        HFXServer current = server;
+        if (current == null) {
+            // The transfer screen reports back asynchronously, so the server can
+            // already be gone (binder death, or a stop that finished first).
+            // Reset the UI instead of dereferencing a null server.
+            changeToStartState();
+            return;
+        }
         startServerBtn.setEnabled(false);
-        server.disconnect(new BackstageTask.BaseEventHandler() {
+        current.disconnect(new BackstageTask.BaseEventHandler() {
                 @Override
                 public void onError(Throwable th) {
                     if (!destroyed) {

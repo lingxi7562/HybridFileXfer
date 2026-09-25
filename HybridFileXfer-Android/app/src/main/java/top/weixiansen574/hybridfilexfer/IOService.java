@@ -22,7 +22,9 @@ public class IOService extends Service {
 
     @Override
     public void onDestroy() {
-        service.destroy();
+        if (service != null) {
+            service.destroy();
+        }
     }
 
     public static synchronized Shizuku.UserServiceArgs getUserServiceArgs(Context context){

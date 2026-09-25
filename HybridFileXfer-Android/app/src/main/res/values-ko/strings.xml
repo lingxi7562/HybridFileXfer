@@ -201,4 +201,12 @@
     <string name="nearby_discovery_failed">자동 검색을 사용할 수 없습니다. 수신기 IP를 직접 입력하세요.</string>
     <string name="invalid_buffer_count">유효한 정수를 입력하세요</string>
     <string name="buffer_count_too_large">최대 %1$d개 블록입니다</string>
+    <string name="missing_launch_extras">시작 매개변수가 없습니다</string>
+    <string name="transfer_complete_avg_speed">전송 완료! 평균 속도: %1$s</string>
+    <string name="error_reading_file">파일 읽기 오류</string>
+    <string name="error_writing_file">파일 쓰기 오류</string>
+    <string name="transfer_failed">전송 실패</string>
+    <string name="error_reading_file_title">파일을 읽는 중 오류가 발생했습니다</string>
+    <string name="error_writing_file_title">파일을 쓰는 중 오류가 발생했습니다</string>
+    <string name="error_occurred">오류가 발생했습니다</string>
 </resources>

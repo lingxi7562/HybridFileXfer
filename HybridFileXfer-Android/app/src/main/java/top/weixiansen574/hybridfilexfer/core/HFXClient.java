@@ -194,6 +194,7 @@ public abstract class HFXClient extends HFXService {
         if (!ctChannel.readBoolean()) {
             //System.out.println("连接失败，手机端内存不足，请调小缓存区块数");
             callback.onRemoteOOM();
+            freeBuffers();
             closeConnections();
             closeQuietly(ctChannel);
             return false;

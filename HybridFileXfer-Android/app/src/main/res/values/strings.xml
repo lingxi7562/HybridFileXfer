@@ -201,4 +201,12 @@
     <string name="nearby_discovery_failed">Automatic discovery is unavailable. Enter the receiver IP manually.</string>
     <string name="invalid_buffer_count">Enter a valid whole number</string>
     <string name="buffer_count_too_large">The maximum is %1$d blocks</string>
+    <string name="missing_launch_extras">Missing launch parameters</string>
+    <string name="transfer_complete_avg_speed">Transfer complete! Average speed: %1$s</string>
+    <string name="error_reading_file">Error reading file</string>
+    <string name="error_writing_file">Error writing file</string>
+    <string name="transfer_failed">Transfer failed</string>
+    <string name="error_reading_file_title">Error occurred while reading file</string>
+    <string name="error_writing_file_title">Error occurred while writing file</string>
+    <string name="error_occurred">An error occurred</string>
 </resources>

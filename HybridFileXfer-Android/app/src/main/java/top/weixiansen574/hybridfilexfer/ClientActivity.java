@@ -61,7 +61,7 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
         Intent intent = getIntent();
         Bundle extras = intent.getExtras();
         if (extras == null) {
-            Toast.makeText(context, "need launch extras", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, R.string.missing_launch_extras, Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
@@ -70,9 +70,10 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
         ioMode = extras.getInt("io_mode");
         isShizuku = ioMode != 0;
         controllerIp = extras.getString("controller_ip");
-        serverPort = extras.getInt("server_port", 5740);
+        int defaultPort = Config.getInstance(context).getServerPort();
+        serverPort = extras.getInt("server_port", defaultPort);
         if (serverPort <= 0 || serverPort > 65535) {
-            serverPort = 5740;
+            serverPort = defaultPort;
         }
         homeDir = extras.getString("home_dir");
 

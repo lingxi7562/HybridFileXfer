@@ -200,4 +200,12 @@
     <string name="nearby_discovery_failed">自动发现不可用，请手动输入接收端 IP。</string>
     <string name="invalid_buffer_count">请输入有效整数</string>
     <string name="buffer_count_too_large">最多可设置 %1$d 个缓冲块</string>
+    <string name="missing_launch_extras">缺少启动参数</string>
+    <string name="transfer_complete_avg_speed">传输完毕！平均速度：%1$s</string>
+    <string name="error_reading_file">读取文件时出错</string>
+    <string name="error_writing_file">写入文件时出错</string>
+    <string name="transfer_failed">传输失败</string>
+    <string name="error_reading_file_title">读取文件时发生错误</string>
+    <string name="error_writing_file_title">写入文件时发生错误</string>
+    <string name="error_occurred">发生错误</string>
 </resources>

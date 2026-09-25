@@ -139,4 +139,12 @@
     <string name="controller_channel_ip">控制器通道IP</string>
     <string name="any_connectable_network_card_ip">任意可連接的網卡IP</string>
     <string name="home_dir">主目錄</string>
+    <string name="missing_launch_extras">缺少啟動參數</string>
+    <string name="transfer_complete_avg_speed">傳輸完畢！平均速度：%1$s</string>
+    <string name="error_reading_file">讀取檔案時出錯</string>
+    <string name="error_writing_file">寫入檔案時出錯</string>
+    <string name="transfer_failed">傳輸失敗</string>
+    <string name="error_reading_file_title">讀取檔案時發生錯誤</string>
+    <string name="error_writing_file_title">寫入檔案時發生錯誤</string>
+    <string name="error_occurred">發生錯誤</string>
 </resources>

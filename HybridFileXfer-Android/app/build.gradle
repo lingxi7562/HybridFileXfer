@@ -2,6 +2,14 @@ plugins {
     id 'com.android.application'
 }
 
+// Optional release keystore. Supply it through the environment (CI secrets) or
+// through gradle.properties to produce an installable release APK. Without it the
+// release APK stays unsigned and the release workflow refuses to publish it.
+def hfxKeystoreFile = System.getenv('HFX_KEYSTORE_FILE') ?: project.findProperty('HFX_KEYSTORE_FILE')
+def hfxKeystorePassword = System.getenv('HFX_KEYSTORE_PASSWORD') ?: project.findProperty('HFX_KEYSTORE_PASSWORD')
+def hfxKeyAlias = System.getenv('HFX_KEY_ALIAS') ?: project.findProperty('HFX_KEY_ALIAS')
+def hfxKeyPassword = System.getenv('HFX_KEY_PASSWORD') ?: project.findProperty('HFX_KEY_PASSWORD')
+
 android {
     namespace 'top.weixiansen574.hybridfilexfer'
     compileSdk 34
@@ -17,6 +25,17 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters "arm64-v8a", "armeabi-v7a", "x86", "x86_64"// 指定目标 CPU 架构
+        }
+    }
+
+    signingConfigs {
+        if (hfxKeystoreFile) {
+            release {
+                storeFile file(hfxKeystoreFile)
+                storePassword hfxKeystorePassword
+                keyAlias hfxKeyAlias
+                keyPassword hfxKeyPassword
+            }
         }
     }
 
@@ -36,6 +55,9 @@ android {
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hfxKeystoreFile) {
+                signingConfig signingConfigs.release
+            }
         }
     }
     compileOptions {
