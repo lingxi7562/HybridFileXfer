@@ -153,13 +153,117 @@ public final class NetworkRouteResolver {
                         || address.isMulticastAddress() || address.isAnyLocalAddress()) {
                     continue;
                 }
-                result.add(new LocalAddress(name, address, vpn, cellular));
+                result.add(new LocalAddress(name, address, vpn, cellular, legacyScope(address)));
             }
         }
         Collections.sort(result, Comparator.comparingInt(LocalAddress::score).reversed()
                 .thenComparing(item -> item.interfaceName)
                 .thenComparing(item -> item.address.getHostAddress()));
         return result;
+    }
+
+    /**
+     * Addresses that can be advertised in a browser share URL.
+     *
+     * <p>Unlike {@link #getLocalIpv4Addresses} this includes IPv6, because a
+     * globally routable IPv6 address is what lets a share work from a different
+     * network. Addresses that can never appear in a browser URL are dropped:
+     * link-local IPv6 needs a zone id ({@code fe80::1%wlan0}) which browsers
+     * cannot express, and IPv4 link-local is never routable.
+     *
+     * <p>Local addresses sort first, so a public address is never preselected.
+     */
+    public static List<LocalAddress> getShareAddresses(Context context) throws SocketException {
+        Set<String> vpnInterfaces = getVpnInterfaceNames(context);
+        ArrayList<LocalAddress> result = new ArrayList<>();
+        Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+        if (interfaces == null) {
+            return result;
+        }
+        while (interfaces.hasMoreElements()) {
+            NetworkInterface networkInterface = interfaces.nextElement();
+            try {
+                if (!networkInterface.isUp() || networkInterface.isLoopback()) {
+                    continue;
+                }
+            } catch (SocketException ignored) {
+                continue;
+            }
+            String name = networkInterface.getName();
+            boolean vpn = vpnInterfaces.contains(name) || isVpnName(name);
+            boolean cellular = isCellularName(name);
+            Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+            while (addresses.hasMoreElements()) {
+                InetAddress address = addresses.nextElement();
+                Scope scope = classify(address);
+                if (scope == null) {
+                    continue;
+                }
+                result.add(new LocalAddress(name, address, vpn, cellular, scope));
+            }
+        }
+        Collections.sort(result, Comparator.comparingInt(LocalAddress::score).reversed()
+                .thenComparing(item -> item.interfaceName)
+                .thenComparing(item -> item.address.getHostAddress()));
+        return result;
+    }
+
+    /**
+     * Classifies an address for sharing, or returns {@code null} when it can
+     * never be reached from a browser.
+     */
+    static Scope classify(InetAddress address) {
+        if (address.isLoopbackAddress() || address.isMulticastAddress()
+                || address.isAnyLocalAddress()) {
+            return null;
+        }
+        if (address instanceof Inet4Address) {
+            if (address.isLinkLocalAddress()) {
+                return null;
+            }
+            return address.isSiteLocalAddress() ? Scope.LAN : Scope.PUBLIC;
+        }
+        byte[] bytes = address.getAddress();
+        if (bytes.length != 16) {
+            return null;
+        }
+        // Compare on masked ints: a byte of 0xfe sign extends to -2, so a plain
+        // "bytes[0] == 0xfe" would never match.
+        int first = bytes[0] & 0xff;
+        int second = bytes[1] & 0xff;
+        if ((first & 0xfe) == 0xfc) {
+            // fc00::/7 unique local. Inet6Address.isSiteLocalAddress() only covers
+            // the deprecated fec0::/10, so ULA has to be matched on the bytes or a
+            // local-only address would be advertised as globally reachable.
+            return Scope.PRIVATE_IPV6;
+        }
+        if (first == 0xfe && (second & 0xc0) == 0x80) {
+            // fe80::/10 link local needs a zone id (fe80::1%wlan0) which a browser
+            // URL cannot carry.
+            return null;
+        }
+        if (first == 0xfe && (second & 0xc0) == 0xc0) {
+            // Deprecated fec0::/10 site local, mirroring Inet6Address.isSiteLocalAddress().
+            return Scope.PRIVATE_IPV6;
+        }
+        return Scope.PUBLIC;
+    }
+
+    private static Scope legacyScope(InetAddress address) {
+        return address.isSiteLocalAddress() ? Scope.LAN : Scope.PUBLIC;
+    }
+
+    /**
+     * Formats an address as the host part of a URL. IPv6 literals must be
+     * bracketed, and a zone id is not valid in a URL host.
+     */
+    public static String formatUrlHost(InetAddress address) {
+        String host = address.getHostAddress();
+        int zone = host.indexOf('%');
+        if (zone >= 0) {
+            host = host.substring(0, zone);
+        }
+        return host.indexOf(':') >= 0 ? "[" + host + "]" : host;
     }
 
     private static Set<String> getVpnInterfaceNames(Context context) {
@@ -192,18 +296,30 @@ public final class NetworkRouteResolver {
                 || lower.startsWith("pdp") || lower.startsWith("wwan");
     }
 
+    /** How far an address can reach, which decides whether a share URL is usable. */
+    public enum Scope {
+        /** IPv4 RFC1918: reachable inside the current local network. */
+        LAN,
+        /** IPv6 unique local (fc00::/7): local only, never routed on the internet. */
+        PRIVATE_IPV6,
+        /** Globally routable: the only scope that can work from another network. */
+        PUBLIC
+    }
+
     public static final class LocalAddress {
         public final String interfaceName;
         public final InetAddress address;
         public final boolean vpn;
         public final boolean cellular;
+        public final Scope scope;
 
         public LocalAddress(String interfaceName, InetAddress address,
-                            boolean vpn, boolean cellular) {
+                            boolean vpn, boolean cellular, Scope scope) {
             this.interfaceName = interfaceName;
             this.address = address;
             this.vpn = vpn;
             this.cellular = cellular;
+            this.scope = scope;
         }
 
         public boolean isDefaultEnabled() {
@@ -212,6 +328,11 @@ public final class NetworkRouteResolver {
 
         private int score() {
             int value = address.isSiteLocalAddress() ? 100 : 20;
+            if (scope == Scope.PRIVATE_IPV6) {
+                // Unique local IPv6 is not internet routable, but it still behaves
+                // like a local address, so it ranks above a public one.
+                value = 60;
+            }
             if (address.isLinkLocalAddress()) {
                 value += 30;
             }

@@ -209,4 +209,7 @@
     <string name="web_step_files">1 · 選擇文件</string>
     <string name="web_step_network">2 · 選擇局域網</string>
     <string name="connection_lost">連接已斷開</string>
+    <string name="web_network_public_warning">公網地址 · 僅當運營商允許入站時才能跨網絡使用。明文 HTTP 傳輸，鏈路上可被讀取，只發給信任的人。</string>
+    <string name="web_network_ula_warning">本地 IPv6 地址 · 僅在本區域網內可達，無法跨網絡訪問。</string>
+    <string name="web_self_check_failed">所選地址無響應，請換一個地址後再分享。</string>
 </resources>

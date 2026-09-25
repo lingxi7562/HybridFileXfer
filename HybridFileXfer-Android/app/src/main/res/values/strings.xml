@@ -210,4 +210,7 @@
     <string name="error_writing_file_title">Error occurred while writing file</string>
     <string name="error_occurred">An error occurred</string>
     <string name="connection_lost">Connection lost</string>
+    <string name="web_network_public_warning">Public address · works across networks only if your carrier allows inbound connections. Plain HTTP, readable in transit — share only with someone you trust.</string>
+    <string name="web_network_ula_warning">Local IPv6 address · reachable on this local network only, not across the internet.</string>
+    <string name="web_self_check_failed">The selected address did not answer. Choose another address before sharing.</string>
 </resources>

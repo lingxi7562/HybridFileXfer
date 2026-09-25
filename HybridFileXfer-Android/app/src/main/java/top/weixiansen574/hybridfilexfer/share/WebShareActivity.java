@@ -26,7 +26,13 @@ import androidx.core.content.ContextCompat;
 
 import com.google.zxing.WriterException;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -40,6 +46,7 @@ import top.weixiansen574.hybridfilexfer.network.NetworkRouteResolver;
 /** UI for sharing selected documents to any browser on the same local network. */
 public class WebShareActivity extends AppCompatActivity implements View.OnClickListener {
     private static final int REQUEST_PICK_FILES = 40;
+    private static final int SELF_CHECK_TIMEOUT_MS = 3000;
     private static final String STATE_URIS = "selected_uris";
     private static final String STATE_ADDRESS = "selected_address";
 
@@ -56,6 +63,7 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
     private Button copyButton;
     private String pendingToken;
     private String restoredAddress;
+    private String selfCheckKey;
     private int runningPort = -1;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
@@ -149,7 +157,7 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
             values.add(uri.toString());
         }
         outState.putStringArrayList(STATE_URIS, values);
-        outState.putString(STATE_ADDRESS, getSelectedAddress());
+        outState.putString(STATE_ADDRESS, getSelectedHostAddress());
         super.onSaveInstanceState(outState);
     }
 
@@ -224,11 +232,11 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
     }
 
     private void refreshAddresses() {
-        String previous = restoredAddress == null ? getSelectedAddress() : restoredAddress;
+        String previous = restoredAddress == null ? getSelectedHostAddress() : restoredAddress;
         restoredAddress = null;
         addresses.clear();
         try {
-            addresses.addAll(NetworkRouteResolver.getLocalIpv4Addresses(this));
+            addresses.addAll(NetworkRouteResolver.getShareAddresses(this));
         } catch (SocketException e) {
             Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
         }
@@ -255,12 +263,18 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
         updateQrCode();
     }
 
-    private String getSelectedAddress() {
+    @Nullable
+    private NetworkRouteResolver.LocalAddress getSelectedAddress() {
         int position = addressSpinner == null ? -1 : addressSpinner.getSelectedItemPosition();
         if (position < 0 || position >= addresses.size()) {
-            return "";
+            return null;
         }
-        return addresses.get(position).address.getHostAddress();
+        return addresses.get(position);
+    }
+
+    private String getSelectedHostAddress() {
+        NetworkRouteResolver.LocalAddress selected = getSelectedAddress();
+        return selected == null ? "" : selected.address.getHostAddress();
     }
 
     private void updateNetworkHint(int position) {
@@ -269,7 +283,11 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
             return;
         }
         NetworkRouteResolver.LocalAddress address = addresses.get(position);
-        if (address.vpn || address.cellular) {
+        if (address.scope == NetworkRouteResolver.Scope.PUBLIC) {
+            networkHint.setText(R.string.web_network_public_warning);
+        } else if (address.scope == NetworkRouteResolver.Scope.PRIVATE_IPV6) {
+            networkHint.setText(R.string.web_network_ula_warning);
+        } else if (address.vpn || address.cellular) {
             networkHint.setText(R.string.web_network_warning);
         } else {
             networkHint.setText(R.string.web_network_ready);
@@ -342,6 +360,7 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
         qrImage.setVisibility(View.VISIBLE);
         shareUrl.setVisibility(View.VISIBLE);
         updateQrCode();
+        verifySelectedAddress();
     }
 
     private void showStoppedState() {
@@ -356,11 +375,14 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
     }
 
     private void updateQrCode() {
-        String address = getSelectedAddress();
-        if (runningPort <= 0 || pendingToken == null || address.isEmpty()) {
+        NetworkRouteResolver.LocalAddress selected = getSelectedAddress();
+        if (runningPort <= 0 || pendingToken == null || selected == null) {
             return;
         }
-        String url = "http://" + address + ":" + runningPort + "/s/" + pendingToken + "/";
+        // IPv6 literals must be bracketed; this single builder feeds the QR image,
+        // the displayed text and the copy button, so all three stay in agreement.
+        String url = "http://" + NetworkRouteResolver.formatUrlHost(selected.address)
+                + ":" + runningPort + "/s/" + pendingToken + "/";
         shareUrl.setText(url);
         try {
             Bitmap bitmap = QrCodeRenderer.render(url, 720);
@@ -368,6 +390,68 @@ public class WebShareActivity extends AppCompatActivity implements View.OnClickL
             qrImage.setContentDescription(getString(R.string.web_qr_description, url));
         } catch (WriterException e) {
             Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Confirms that the advertised address really answers before the user hands
+     * the QR code to someone, so a bracketed IPv6 URL or an address that the
+     * platform refuses to serve is reported instead of silently producing a dead
+     * code.
+     */
+    private void verifySelectedAddress() {
+        final NetworkRouteResolver.LocalAddress selected = getSelectedAddress();
+        final int port = runningPort;
+        final String token = pendingToken;
+        if (selected == null || port <= 0 || token == null) {
+            return;
+        }
+        final String key = selected.address.getHostAddress() + ":" + port;
+        if (key.equals(selfCheckKey)) {
+            return;
+        }
+        selfCheckKey = key;
+        final InetAddress address = selected.address;
+        new Thread(() -> {
+            final boolean reachable = probeShareUrl(address, port, token);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                if (!reachable) {
+                    shareStatus.setText(R.string.web_self_check_failed);
+                } else if (getSelectedHostAddress().equals(address.getHostAddress())) {
+                    shareStatus.setText(R.string.web_share_running);
+                }
+            });
+        }, "share-self-check").start();
+    }
+
+    private static boolean probeShareUrl(InetAddress address, int port, String token) {
+        Socket socket = new Socket();
+        try {
+            socket.connect(new InetSocketAddress(address, port), SELF_CHECK_TIMEOUT_MS);
+            socket.setSoTimeout(SELF_CHECK_TIMEOUT_MS);
+            OutputStream output = socket.getOutputStream();
+            String request = "GET /s/" + token + "/ HTTP/1.1\r\nHost: "
+                    + NetworkRouteResolver.formatUrlHost(address)
+                    + "\r\nConnection: close\r\n\r\n";
+            output.write(request.getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            byte[] buffer = new byte[64];
+            int read = socket.getInputStream().read(buffer);
+            if (read <= 0) {
+                return false;
+            }
+            String statusLine = new String(buffer, 0, read, StandardCharsets.US_ASCII);
+            return statusLine.startsWith("HTTP/1.1 200") || statusLine.startsWith("HTTP/1.0 200");
+        } catch (IOException | RuntimeException e) {
+            return false;
+        } finally {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
         }
     }
 }
