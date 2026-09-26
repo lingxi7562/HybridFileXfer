@@ -1,6 +1,7 @@
 package top.weixiansen574.hybridfilexfer.jdkcore;
 
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
 import top.weixiansen574.hybridfilexfer.core.Utils;
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
@@ -16,8 +17,8 @@ public class JdkReadFileCall extends ReadFileCall {
     private RandomAccessFile randomAccessFile;
     private FileChannel channel;
 
-    public JdkReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        super(buffers, files, localDir, remoteDir, operateThreadCount);
+    public JdkReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, ResumeState resumeState) {
+        super(buffers, files, localDir, remoteDir, operateThreadCount, resumeState);
     }
 
     @Override

@@ -11,6 +11,7 @@ import java.util.concurrent.LinkedBlockingDeque;
 
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 
@@ -21,8 +22,8 @@ public class DroidReadFileCall extends ReadFileCall {
     private FileInputStream fileInputStream;
     private FileChannel channel;
 
-    public DroidReadFileCall(IIOService ioService,LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        super(buffers, files, localDir, remoteDir, operateThreadCount);
+    public DroidReadFileCall(IIOService ioService,LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, ResumeState resumeState) {
+        super(buffers, files, localDir, remoteDir, operateThreadCount, resumeState);
         this.ioService = ioService;
     }
 

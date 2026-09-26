@@ -2,6 +2,8 @@ package top.weixiansen574.hybridfilexfer.jdkcore;
 
 import top.weixiansen574.hybridfilexfer.core.HFXClient;
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
+import top.weixiansen574.hybridfilexfer.core.ResumeStateStore;
 import top.weixiansen574.hybridfilexfer.core.Utils;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
@@ -66,12 +68,18 @@ public class JdkHFXClient extends HFXClient {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        return new JdkWriteFileCall(buffers,dequeCount);
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers,
+                                                int dequeCount, ResumeState resumeState) {
+        return new JdkWriteFileCall(buffers,dequeCount,resumeState);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        return new JdkReadFileCall(buffers,files,localDir,remoteDir,operateThreadCount);
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, ResumeState resumeState) {
+        return new JdkReadFileCall(buffers,files,localDir,remoteDir,operateThreadCount,resumeState);
+    }
+
+    @Override
+    protected ResumeStateStore createResumeStateStore(String destinationPath) {
+        return new JdkResumeStateStore(destinationPath);
     }
 }

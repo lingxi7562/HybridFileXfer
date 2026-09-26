@@ -9,6 +9,7 @@ import java.nio.channels.FileChannel;
 import java.util.concurrent.LinkedBlockingDeque;
 
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 
 public class DroidWriteFileCall extends WriteFileCall {
@@ -16,8 +17,9 @@ public class DroidWriteFileCall extends WriteFileCall {
     private ParcelFileDescriptor pfd;
     private FileOutputStream fileOutputStream;
     private FileChannel channel;
-    public DroidWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, IIOService ioService) {
-        super(buffers, dequeCount);
+    public DroidWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount,
+                              IIOService ioService, ResumeState resumeState) {
+        super(buffers, dequeCount, resumeState);
         this.ioService = ioService;
     }
 
@@ -92,5 +94,12 @@ public class DroidWriteFileCall extends WriteFileCall {
     @Override
     protected boolean setFileLastModified(String path, long time) throws Exception {
         return ioService.setFileLastModified(path,time);
+    }
+
+    @Override
+    protected void renameFile(String from, String to) throws Exception {
+        if (!ioService.renameFile(from, to)) {
+            throw new IOException("Unable to move " + from + " to " + to);
+        }
     }
 }

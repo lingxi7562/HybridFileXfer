@@ -14,6 +14,8 @@ import top.weixiansen574.hybridfilexfer.NativeMemory;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
 import top.weixiansen574.hybridfilexfer.core.HFXClient;
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
+import top.weixiansen574.hybridfilexfer.core.ResumeStateStore;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
@@ -77,13 +79,19 @@ public class DroidHFXClient extends HFXClient {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        return new DroidWriteFileCall(buffers,dequeCount,iioService);
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers,
+                                                int dequeCount, ResumeState resumeState) {
+        return new DroidWriteFileCall(buffers,dequeCount,iioService,resumeState);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        return new DroidReadFileCall(iioService,buffers,files,localDir,remoteDir,operateThreadCount);
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, ResumeState resumeState) {
+        return new DroidReadFileCall(iioService,buffers,files,localDir,remoteDir,operateThreadCount,resumeState);
+    }
+
+    @Override
+    protected ResumeStateStore createResumeStateStore(String destinationPath) {
+        return new DroidResumeStateStore(iioService, destinationPath);
     }
 
     public void freeBuffers(){

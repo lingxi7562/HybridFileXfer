@@ -29,6 +29,7 @@ public abstract class ReadFileCall implements Callable<Void> {
     private final Directory localDir;
     private final Directory remoteDir;
     private final int operateThreadCount;
+    private final ResumeState resumeState;
     private final Object stateLock = new Object();
     private final Set<String> transferPaths = new HashSet<>();
     private volatile boolean canceled;
@@ -37,11 +38,18 @@ public abstract class ReadFileCall implements Callable<Void> {
 
     public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files,
                         Directory localDir, Directory remoteDir, int operateThreadCount) {
+        this(buffers, files, localDir, remoteDir, operateThreadCount, null);
+    }
+
+    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files,
+                        Directory localDir, Directory remoteDir, int operateThreadCount,
+                        ResumeState resumeState) {
         this.buffers = buffers;
         this.files = files;
         this.localDir = localDir;
         this.remoteDir = remoteDir;
         this.operateThreadCount = operateThreadCount;
+        this.resumeState = resumeState;
     }
 
     @Override
@@ -133,6 +141,26 @@ public abstract class ReadFileCall implements Callable<Void> {
                 throw new IOException("File is too large for the transfer protocol");
             }
             long lastModified = file.lastModified();
+            // A record from an interrupted attempt lets this device leave out the
+            // bytes the receiver already holds. It is only honoured when size and
+            // modification time match, so an edited source is sent in full.
+            ResumeState.Entry resumeEntry = resumeState == null ? null
+                    : resumeState.matchFile(transferPath, length, lastModified);
+            int blockCount = (int) FileBlock.calcBlockCount(length);
+            if (resumeEntry != null && resumeEntry.blockCount != blockCount) {
+                resumeEntry = null;
+            }
+
+            if (resumeEntry != null && resumeEntry.blocks.cardinality() == blockCount) {
+                // Nothing to read: one metadata frame tells the receiver the file is
+                // part of this transfer and its record already covers every block.
+                if (!enqueueIfActive(FileBlock.skipped(fileIndex, transferPath,
+                        lastModified, length, 0, blockLength(length, 0)))) {
+                    throw new InterruptedException("File reading was canceled");
+                }
+                return;
+            }
+
             long remaining = length;
             if (length == 0) {
                 enqueueFileBlock(channel, transferPath, length, lastModified, 0, 0);
@@ -142,7 +170,14 @@ public abstract class ReadFileCall implements Callable<Void> {
             while (remaining > 0) {
                 ensureActive();
                 int blockSize = (int) Math.min(remaining, FileBlock.BLOCK_SIZE);
-                enqueueFileBlock(channel, transferPath, length, lastModified, index, blockSize);
+                if (resumeEntry != null && resumeEntry.blocks.get(index)) {
+                    if (!enqueueIfActive(FileBlock.skipped(fileIndex, transferPath,
+                            lastModified, length, index, blockSize))) {
+                        throw new InterruptedException("File reading was canceled");
+                    }
+                } else {
+                    enqueueFileBlock(channel, transferPath, length, lastModified, index, blockSize);
+                }
                 remaining -= blockSize;
                 index++;
             }
@@ -151,12 +186,29 @@ public abstract class ReadFileCall implements Callable<Void> {
         }
     }
 
+    /** Length of one block of a file of the given size. */
+    static int blockLength(long totalSize, int index) {
+        if (totalSize <= 0) {
+            return 0;
+        }
+        long start = FileBlock.BLOCK_SIZE * (long) index;
+        if (start >= totalSize) {
+            return 0;
+        }
+        return (int) Math.min(totalSize - start, FileBlock.BLOCK_SIZE);
+    }
+
     private void enqueueFileBlock(FileChannel channel, String transferPath, long length,
                                   long lastModified, int index, int blockSize) throws Exception {
         ByteBuffer buffer = buffers.take();
         boolean queued = false;
         try {
             ensureActive();
+            // Seek for every block instead of relying on the channel position to
+            // advance on its own: a block that is skipped is never read, so without
+            // an explicit seek every later block would be read from an offset short
+            // by the skipped amount, silently corrupting the file.
+            channel.position(FileBlock.BLOCK_SIZE * (long) index);
             buffer.clear();
             buffer.limit(blockSize);
             while (buffer.hasRemaining()) {

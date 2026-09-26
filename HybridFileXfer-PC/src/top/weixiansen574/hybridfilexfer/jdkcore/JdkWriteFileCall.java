@@ -1,5 +1,6 @@
 package top.weixiansen574.hybridfilexfer.jdkcore;
 
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 
 import java.io.File;
@@ -7,14 +8,17 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.concurrent.LinkedBlockingDeque;
 
 public class JdkWriteFileCall extends WriteFileCall {
     private RandomAccessFile file;
     private FileChannel channel;
 
-    public JdkWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        super(buffers, dequeCount);
+    public JdkWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount,
+                            ResumeState resumeState) {
+        super(buffers, dequeCount, resumeState);
     }
 
     @Override
@@ -50,6 +54,17 @@ public class JdkWriteFileCall extends WriteFileCall {
     @Override
     protected boolean setFileLastModified(String path, long time) throws Exception {
         return new File(path).setLastModified(time);
+    }
+
+    /**
+     * Uses an atomic replace so an existing destination file survives until the new
+     * one is complete. File.renameTo cannot overwrite on Windows, which is why this
+     * goes through Files.move with REPLACE_EXISTING.
+     */
+    @Override
+    protected void renameFile(String from, String to) throws Exception {
+        Files.move(new File(from).toPath(), new File(to).toPath(),
+                StandardCopyOption.REPLACE_EXISTING);
     }
 
     private void mkdirOrThrow(File file) throws IOException {

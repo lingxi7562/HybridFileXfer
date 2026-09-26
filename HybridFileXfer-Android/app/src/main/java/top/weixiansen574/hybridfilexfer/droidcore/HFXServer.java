@@ -31,6 +31,8 @@ import top.weixiansen574.hybridfilexfer.core.FileBlock;
 import top.weixiansen574.hybridfilexfer.core.HFXService;
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
 import top.weixiansen574.hybridfilexfer.core.ReceiveFileCall;
+import top.weixiansen574.hybridfilexfer.core.ResumeState;
+import top.weixiansen574.hybridfilexfer.core.ResumeStateStore;
 import top.weixiansen574.hybridfilexfer.core.SendFileCall;
 import top.weixiansen574.hybridfilexfer.core.SpeedMonitorThread;
 import top.weixiansen574.hybridfilexfer.core.TransferConnection;
@@ -97,6 +99,11 @@ public class HFXServer extends HFXService {
             //协议判断
             SocketChannel controlSocket = serverSocketChannel.accept();
             try {
+                // Transfer channels already enable these; without them on the control
+                // channel a silently vanished peer is only noticed by the OS keepalive
+                // timer, which is measured in hours.
+                controlSocket.socket().setKeepAlive(true);
+                controlSocket.socket().setTcpNoDelay(true);
                 ctChannel = new DataByteChannel(controlSocket, HANDSHAKE_IDLE_TIMEOUT_MS);
                 this.ctChannel = ctChannel;
             } catch (IOException e) {
@@ -197,11 +204,16 @@ public class HFXServer extends HFXService {
                             }
                         }
                         callback.onAcceptFailed(name);
-                        closeAttempt(ctChannel, connections);
                         if (!serverSocketChannel.isOpen()) {
                             throw e;
                         }
-                        continue connectionLoop;
+                        // This interface could not finish its handshake, which is not
+                        // fatal: the peer has already declared this channel and is
+                        // waiting for exactly one answer, so it is told the channel is
+                        // out and the session carries on with the remaining ones. This
+                        // mirrors how a client-declared failure is treated below, so a
+                        // single flaky NIC no longer tears down the whole session setup.
+                        ctChannel.writeBoolean(false);
                     }
                 } else {
                     // v301: one unreachable VPN/hotspot interface is non-fatal.
@@ -628,12 +640,18 @@ public class HFXServer extends HFXService {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        return new DroidWriteFileCall(buffers,dequeCount,ioService);
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers,
+                                                int dequeCount, ResumeState resumeState) {
+        return new DroidWriteFileCall(buffers,dequeCount,ioService,resumeState);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        return new DroidReadFileCall(ioService,buffers,files,localDir,remoteDir,operateThreadCount);
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, ResumeState resumeState) {
+        return new DroidReadFileCall(ioService,buffers,files,localDir,remoteDir,operateThreadCount,resumeState);
+    }
+
+    @Override
+    protected ResumeStateStore createResumeStateStore(String destinationPath) {
+        return new DroidResumeStateStore(ioService, destinationPath);
     }
 }

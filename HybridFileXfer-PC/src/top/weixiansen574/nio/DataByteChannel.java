@@ -60,13 +60,20 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
             if (read != 0 || selector == null) {
                 return read;
             }
-            awaitReady(SelectionKey.OP_READ);
+            // A read returns as soon as one byte arrives, so a fresh deadline per
+            // call is the right granularity here.
+            awaitReady(SelectionKey.OP_READ, deadlineNanos());
         }
     }
 
     @Override
     public int write(ByteBuffer src) throws IOException {
         int total = 0;
+        // One deadline for the whole write. awaitReady re-arms its timer on every
+        // call, so a peer that accepts a trickle forever would never trip the idle
+        // timeout and the sending thread could stay wedged indefinitely instead of
+        // failing the transfer.
+        long deadline = deadlineNanos();
         while (src.hasRemaining()) {
             int written = origin.write(src);
             if (written < 0) {
@@ -76,13 +83,20 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
                 if (selector == null) {
                     Thread.yield();
                 } else {
-                    awaitReady(SelectionKey.OP_WRITE);
+                    awaitReady(SelectionKey.OP_WRITE, deadline);
                 }
                 continue;
             }
             total += written;
         }
         return total;
+    }
+
+    /** Absolute deadline for an operation, or 0 when no timeout is configured. */
+    private long deadlineNanos() {
+        long timeout = idleTimeoutMillis;
+        return timeout == 0 ? 0
+                : System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
     }
 
     @Override
@@ -109,7 +123,7 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
         }
     }
 
-    private void awaitReady(int operation) throws IOException {
+    private void awaitReady(int operation, long deadlineNanos) throws IOException {
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedIOException("Interrupted while waiting for network I/O");
         }
@@ -126,15 +140,13 @@ public class DataByteChannel implements ByteChannel, DataInput, DataOutput {
             throw closed;
         }
         long timeout = idleTimeoutMillis;
-        long deadline = timeout == 0 ? 0
-                : System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
         try {
             while (true) {
                 int ready;
-                if (timeout == 0) {
+                if (deadlineNanos == 0) {
                     ready = selector.select();
                 } else {
-                    long remainingNanos = deadline - System.nanoTime();
+                    long remainingNanos = deadlineNanos - System.nanoTime();
                     if (remainingNanos <= 0) {
                         throw new SocketTimeoutException(
                                 "No network progress for " + timeout + " ms");

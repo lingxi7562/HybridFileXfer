@@ -90,6 +90,29 @@ public class IOServiceImpl extends IIOService.Stub {
         return new File(path).setLastModified(time);
     }
 
+    /**
+     * Moves a completed in-progress file onto its final name. rename(2) replaces an
+     * existing destination atomically, so the previous file survives until the new
+     * one is complete; the explicit delete is only a fallback for file systems that
+     * refuse to overwrite.
+     */
+    public boolean renameFile(String from, String to){
+        File source = new File(from);
+        if (!source.exists()) {
+            System.out.println("文件不存在: " + from);
+            return false;
+        }
+        File destination = new File(to);
+        if (source.renameTo(destination)) {
+            return true;
+        }
+        if (destination.exists() && !destination.delete()) {
+            System.out.println("无法删除目标文件: " + to);
+            return false;
+        }
+        return source.renameTo(destination);
+    }
+
     public boolean deleteFile(String path){
         File file = new File(path);
         if (!file.exists()) {

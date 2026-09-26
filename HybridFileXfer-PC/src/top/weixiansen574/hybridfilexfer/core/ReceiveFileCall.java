@@ -88,6 +88,28 @@ public class ReceiveFileCall implements Callable<Void> {
                         pendingBuffer = null;
                         break;
                     }
+                    case TransferIdentifiers.SKIPPED_FILE_SLICE: {
+                        int fileIndex = channel.readInt();
+                        String path = channel.readUTF();
+                        TransferPathGuard.validate(destination, path);
+                        long lastModified = channel.readLong();
+                        long totalSize = channel.readLong();
+                        int index = channel.readInt();
+                        int length = channel.readInt();
+                        long startPosition = index * (long) FileBlock.BLOCK_SIZE;
+                        if (fileIndex < 0 || fileIndex >= HFXService.MAX_FILE_ENTRIES
+                                || totalSize < 0 || index < 0
+                                || length < 0 || length > FileBlock.BLOCK_SIZE
+                                || startPosition > totalSize
+                                || length > totalSize - startPosition) {
+                            throw new IOException("Invalid skipped block metadata");
+                        }
+                        // No buffer is taken and nothing is queued: these bytes are
+                        // already on disk from the interrupted attempt.
+                        writeFileCall.markBlockSkipped(FileBlock.skipped(fileIndex, path,
+                                lastModified, totalSize, index, length));
+                        break;
+                    }
                     case TransferIdentifiers.EOF:
                         //System.out.println(iName + " 接收完成");
                         writeFileCall.finishChannel(tIndex, channel.readInt());

@@ -44,6 +44,15 @@ public class TransferConnection {
         return totalTraffic;
     }
 
+    /**
+     * Cumulative bytes moved on this channel in either direction since the last
+     * {@link #resetTotalTrafficInfo()}. Used as the progress signal for stall
+     * detection: it only ever grows while the transfer is healthy.
+     */
+    public synchronized long transferredBytes() {
+        return totalTraffic.uploadTraffic + totalTraffic.downloadTraffic;
+    }
+
     public void close() throws IOException {
         channel.close();
     }

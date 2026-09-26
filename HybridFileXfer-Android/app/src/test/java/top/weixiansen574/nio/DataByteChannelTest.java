@@ -3,11 +3,18 @@ package top.weixiansen574.nio;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ByteChannel;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class DataByteChannelTest {
     @Test
@@ -20,6 +27,42 @@ public class DataByteChannelTest {
 
         assertEquals(input.length, written);
         assertArrayEquals(input, partial.output());
+    }
+
+    /**
+     * Regression guard for a wedged sender: the idle deadline used to be re-armed
+     * on every internal wait, so a peer that stopped draining could keep a write
+     * looping forever while the transfer never reported failure and the UI stayed
+     * stuck. The deadline now covers the whole write.
+     */
+    @Test
+    public void writeFailsWhenThePeerStopsDraining() throws Exception {
+        ServerSocketChannel listener = ServerSocketChannel.open();
+        listener.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+        // ServerSocketChannel.getAddress() is absent from the Android API surface
+        // this test compiles against, so the port is read from the socket.
+        int port = listener.socket().getLocalPort();
+        SocketChannel sender = SocketChannel.open();
+        sender.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port));
+        SocketChannel stalledPeer = listener.accept();
+        DataByteChannel channel = new DataByteChannel(sender, 2_000L);
+        try {
+            // Far more than any socket buffer, and the peer never reads.
+            ByteBuffer data = ByteBuffer.allocate(64 * 1024 * 1024);
+            long started = System.currentTimeMillis();
+            try {
+                channel.write(data);
+                fail("A peer that stops draining must fail the write, not block forever");
+            } catch (SocketTimeoutException expected) {
+                long elapsed = System.currentTimeMillis() - started;
+                assertTrue("expected to give up near the idle timeout, took " + elapsed + " ms",
+                        elapsed < 30_000L);
+            }
+        } finally {
+            channel.close();
+            stalledPeer.close();
+            listener.close();
+        }
     }
 
     private static final class PartialWriteChannel implements ByteChannel {

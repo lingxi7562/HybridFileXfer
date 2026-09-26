@@ -13,9 +13,16 @@ public class FileBlock implements Comparable<FileBlock> {
     public final long totalSize;
     public final int index;
     public final ByteBuffer data;
+    /** True for a block the receiver already has: metadata only, no payload. */
+    public final boolean skipped;
     private final int length;
 
     public FileBlock(boolean isFile, int fileIndex, String path, long lastModified, long totalSize, int index, ByteBuffer data) {
+        this(isFile, fileIndex, path, lastModified, totalSize, index, data, false, -1);
+    }
+
+    private FileBlock(boolean isFile, int fileIndex, String path, long lastModified,
+                      long totalSize, int index, ByteBuffer data, boolean skipped, int length) {
         this.isFile = isFile;
         this.fileIndex = fileIndex;
         this.path = path;
@@ -23,7 +30,19 @@ public class FileBlock implements Comparable<FileBlock> {
         this.totalSize = totalSize;
         this.index = index;
         this.data = data;
-        this.length = data == null ? -1 : data.position();
+        this.skipped = skipped;
+        this.length = data == null ? length : data.position();
+    }
+
+    /**
+     * A block the receiver already holds from an earlier attempt. It carries the
+     * full metadata so the receiver can still validate the file identity and the
+     * block length, but no bytes travel.
+     */
+    public static FileBlock skipped(int fileIndex, String path, long lastModified,
+                                    long totalSize, int index, int length) {
+        return new FileBlock(true, fileIndex, path, lastModified, totalSize, index,
+                null, true, length);
     }
 
     public long getStartPosition(){
@@ -31,6 +50,11 @@ public class FileBlock implements Comparable<FileBlock> {
     }
 
     public long calcBlockCount(){
+        return calcBlockCount(totalSize);
+    }
+
+    /** Number of protocol blocks a file of this size occupies. */
+    public static long calcBlockCount(long totalSize) {
         return totalSize <= 0 ? 1
                 : totalSize / BLOCK_SIZE + (totalSize % BLOCK_SIZE == 0 ? 0 : 1);
     }
@@ -44,9 +68,6 @@ public class FileBlock implements Comparable<FileBlock> {
     }
 
     public int getLength(){
-        if (data == null){
-            return -1;
-        }
         return length;
     }
 

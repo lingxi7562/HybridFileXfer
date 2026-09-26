@@ -150,7 +150,8 @@ public final class NetworkRouteResolver {
             while (addresses.hasMoreElements()) {
                 InetAddress address = addresses.nextElement();
                 if (!(address instanceof Inet4Address) || address.isLoopbackAddress()
-                        || address.isMulticastAddress() || address.isAnyLocalAddress()) {
+                        || address.isMulticastAddress() || address.isAnyLocalAddress()
+                        || address.isLinkLocalAddress()) {
                     continue;
                 }
                 result.add(new LocalAddress(name, address, vpn, cellular, legacyScope(address)));

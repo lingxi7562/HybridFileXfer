@@ -9,4 +9,9 @@ public class TransferIdentifiers {
     public static final short END_OF_INTERRUPTED = 4;
     public static final short END_OF_READ_ERROR = 5;
     public static final short END_OF_WRITE_ERROR = 6;
+    /**
+     * Metadata only, no payload: a block the receiver already holds from a
+     * previous attempt, so the sender leaves its bytes out of this transfer.
+     */
+    public static final short SKIPPED_FILE_SLICE = 7;
 }
